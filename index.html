@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>古文クイズ（試作）</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      padding: 40px;
+    }
+    button {
+      display: block;
+      margin: 10px auto;
+      padding: 10px 20px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>古文単語クイズ（試作）</h1>
+<p id="question">問題を読み込み中...</p>
+
+<div id="choices"></div>
+
+<p id="result"></p>
+
+<script>
+const quiz = {
+  word: "あはれ",
+  question: "「あはれ」の意味は？",
+  choices: [
+    "しみじみとした感動",
+    "怒り",
+    "驚き",
+    "喜び"
+  ],
+  answer: "しみじみとした感動"
+};
+
+const questionEl = document.getElementById("question");
+const choicesEl = document.getElementById("choices");
+const resultEl = document.getElementById("result");
+
+function loadQuiz() {
+  questionEl.textContent = quiz.question;
+
+  quiz.choices.forEach(choice => {
+    const btn = document.createElement("button");
+    btn.textContent = choice;
+    btn.onclick = () => checkAnswer(choice);
+    choicesEl.appendChild(btn);
+  });
+}
+
+function checkAnswer(choice) {
+  if (choice === quiz.answer) {
+    resultEl.textContent = "正解！";
+  } else {
+    resultEl.textContent = "不正解…";
+  }
+}
+
+loadQuiz();
+</script>
+
+</body>
+</html>
