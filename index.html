@@ -14,6 +14,7 @@
     margin: 10px auto;
     padding: 10px;
     width: 250px;
+    font-size: 16px;
   }
 </style>
 </head>
@@ -34,20 +35,34 @@
 let quizData = [];
 let currentQuiz = null;
 
+// ★ あなたのCSVファイル名に合わせています
+const CSV_FILE = "kobun-quiz-template_test.csv";
+
 // CSV読み込み
-fetch("kobun-quiz-template_test.csv")
-  .then(res => res.text())
+fetch(CSV_FILE)
+  .then(res => {
+    if (!res.ok) throw new Error("CSV読み込み失敗");
+    return res.text();
+  })
   .then(text => {
     quizData = parseCSV(text);
+    console.log("読み込みデータ:", quizData);
     nextQuestion();
+  })
+  .catch(err => {
+    document.getElementById("question").textContent = "CSVの読み込みに失敗しました";
+    console.error(err);
   });
 
-// CSVパース
+// ★ 強化版CSVパーサ（カンマ・ダブルクォート対応）
 function parseCSV(text) {
   const lines = text.trim().split("\n");
   const headers = lines[0].split(",");
+
   return lines.slice(1).map(line => {
-    const values = line.split(",");
+    const values = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g)
+      .map(v => v.replace(/^"|"$/g, ''));
+
     let obj = {};
     headers.forEach((h, i) => obj[h] = values[i]);
     return obj;
@@ -59,10 +74,12 @@ function nextQuestion() {
   document.getElementById("result").textContent = "";
   document.getElementById("explanation").textContent = "";
 
+  if (quizData.length === 0) return;
+
   currentQuiz = quizData[Math.floor(Math.random() * quizData.length)];
 
-  document.getElementById("category").textContent = "【" + currentQuiz.category + "】";
-  document.getElementById("question").textContent = currentQuiz.question;
+  document.getElementById("category").textContent = "【" + (currentQuiz.category || "") + "】";
+  document.getElementById("question").textContent = currentQuiz.question || "問題なし";
 
   const choicesEl = document.getElementById("choices");
   choicesEl.innerHTML = "";
@@ -72,7 +89,7 @@ function nextQuestion() {
     currentQuiz.choice2,
     currentQuiz.choice3,
     currentQuiz.choice4
-  ];
+  ].filter(c => c); // undefined対策
 
   // ランダム並び替え
   choices.sort(() => Math.random() - 0.5);
@@ -93,10 +110,10 @@ function checkAnswer(choice) {
   if (choice === currentQuiz.answer) {
     resultEl.textContent = "正解！";
   } else {
-    resultEl.textContent = "不正解…";
+    resultEl.textContent = "不正解…（正解：" + currentQuiz.answer + "）";
   }
 
-  explanationEl.textContent = "解説：" + currentQuiz.explanation;
+  explanationEl.textContent = "解説：" + (currentQuiz.explanation || "");
 }
 </script>
 
