@@ -1,52 +1,83 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>古文クイズ（試作）</title>
-  <style>
-    body {
-      font-family: sans-serif;
-      text-align: center;
-      padding: 40px;
-    }
-    button {
-      display: block;
-      margin: 10px auto;
-      padding: 10px 20px;
-      font-size: 16px;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>古文クイズ</title>
+<style>
+  body {
+    font-family: sans-serif;
+    text-align: center;
+    padding: 30px;
+  }
+  button {
+    display: block;
+    margin: 10px auto;
+    padding: 10px;
+    width: 250px;
+  }
+</style>
 </head>
 <body>
 
-<h1>古文単語クイズ（試作）</h1>
-<p id="question">問題を読み込み中...</p>
+<h1>古文クイズ</h1>
+<p id="category"></p>
+<p id="question">読み込み中...</p>
 
 <div id="choices"></div>
 
 <p id="result"></p>
+<p id="explanation"></p>
+
+<button onclick="nextQuestion()">次の問題</button>
 
 <script>
-const quiz = {
-  word: "あはれ",
-  question: "「あはれ」の意味は？",
-  choices: [
-    "しみじみとした感動",
-    "怒り",
-    "驚き",
-    "喜び"
-  ],
-  answer: "しみじみとした感動"
-};
+let quizData = [];
+let currentQuiz = null;
 
-const questionEl = document.getElementById("question");
-const choicesEl = document.getElementById("choices");
-const resultEl = document.getElementById("result");
+// CSV読み込み
+fetch("questions.csv")
+  .then(res => res.text())
+  .then(text => {
+    quizData = parseCSV(text);
+    nextQuestion();
+  });
 
-function loadQuiz() {
-  questionEl.textContent = quiz.question;
+// CSVパース
+function parseCSV(text) {
+  const lines = text.trim().split("\n");
+  const headers = lines[0].split(",");
+  return lines.slice(1).map(line => {
+    const values = line.split(",");
+    let obj = {};
+    headers.forEach((h, i) => obj[h] = values[i]);
+    return obj;
+  });
+}
 
-  quiz.choices.forEach(choice => {
+// 問題表示
+function nextQuestion() {
+  document.getElementById("result").textContent = "";
+  document.getElementById("explanation").textContent = "";
+
+  currentQuiz = quizData[Math.floor(Math.random() * quizData.length)];
+
+  document.getElementById("category").textContent = "【" + currentQuiz.category + "】";
+  document.getElementById("question").textContent = currentQuiz.question;
+
+  const choicesEl = document.getElementById("choices");
+  choicesEl.innerHTML = "";
+
+  let choices = [
+    currentQuiz.choice1,
+    currentQuiz.choice2,
+    currentQuiz.choice3,
+    currentQuiz.choice4
+  ];
+
+  // ランダム並び替え
+  choices.sort(() => Math.random() - 0.5);
+
+  choices.forEach(choice => {
     const btn = document.createElement("button");
     btn.textContent = choice;
     btn.onclick = () => checkAnswer(choice);
@@ -54,15 +85,19 @@ function loadQuiz() {
   });
 }
 
+// 判定
 function checkAnswer(choice) {
-  if (choice === quiz.answer) {
+  const resultEl = document.getElementById("result");
+  const explanationEl = document.getElementById("explanation");
+
+  if (choice === currentQuiz.answer) {
     resultEl.textContent = "正解！";
   } else {
     resultEl.textContent = "不正解…";
   }
-}
 
-loadQuiz();
+  explanationEl.textContent = "解説：" + currentQuiz.explanation;
+}
 </script>
 
 </body>
