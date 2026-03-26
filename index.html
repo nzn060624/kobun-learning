@@ -4,116 +4,181 @@
 <meta charset="UTF-8">
 <title>古文クイズ</title>
 <style>
-  body {
-    font-family: sans-serif;
-    text-align: center;
-    padding: 30px;
-  }
-  button {
-    display: block;
-    margin: 10px auto;
-    padding: 10px;
-    width: 250px;
-    font-size: 16px;
-  }
+  body { font-family: sans-serif; text-align: center; }
+  .hidden { display: none; }
+  button { margin: 10px; padding: 10px 20px; }
 </style>
 </head>
 <body>
 
-<h1>古文クイズ</h1>
-<p id="category"></p>
-<p id="question">読み込み中...</p>
+<!-- ホーム画面 -->
+<div id="home">
+  <h1>古文クイズ</h1>
+  <button onclick="goCategory()">クイズを始める</button>
+  <h2>学習記録</h2>
+  <p id="record"></p>
+</div>
 
-<div id="choices"></div>
+<!-- カテゴリ選択 -->
+<div id="category" class="hidden">
+  <h2>カテゴリ選択</h2>
+  <button onclick="startQuiz('古文単語')">古文単語</button>
+  <button onclick="startQuiz('動詞活用')">動詞活用</button>
+  <br>
+  <button onclick="goHome()">戻る</button>
+</div>
 
-<p id="result"></p>
-<p id="explanation"></p>
+<!-- クイズ画面 -->
+<div id="quiz" class="hidden">
+  <h3 id="quiz-category"></h3>
+  <p id="question"></p>
+  <div id="choices"></div>
+  <p id="progress"></p>
+</div>
 
-<button onclick="nextQuestion()">次の問題</button>
+<!-- 結果画面 -->
+<div id="result" class="hidden">
+  <h2>結果</h2>
+  <p id="score"></p>
+  <div id="result-list"></div>
+  <button onclick="continueQuiz()">続けてチャレンジ</button>
+  <button onclick="goCategory()">カテゴリ選択へ戻る</button>
+</div>
 
 <script>
 let quizData = [];
-let currentQuiz = null;
-
-// ★ あなたのCSVファイル名に合わせています
-const CSV_FILE = "kobun-quiz-template_test.csv";
+let currentQuiz = [];
+let currentIndex = 0;
+let score = 0;
+let selectedCategory = "";
+let history = JSON.parse(localStorage.getItem("history")) || { correct: 0, total: 0 };
 
 // CSV読み込み
-fetch(CSV_FILE)
-  .then(res => {
-    if (!res.ok) throw new Error("CSV読み込み失敗");
-    return res.text();
-  })
+fetch("questions.csv")
+  .then(res => res.text())
   .then(text => {
     quizData = parseCSV(text);
-    console.log("読み込みデータ:", quizData);
-    nextQuestion();
-  })
-  .catch(err => {
-    document.getElementById("question").textContent = "CSVの読み込みに失敗しました";
-    console.error(err);
+    updateRecord();
   });
 
-// ★ 強化版CSVパーサ（カンマ・ダブルクォート対応）
 function parseCSV(text) {
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = text.trim().split("\n");
   const headers = lines[0].split(",");
 
   return lines.slice(1).map(line => {
-    const values = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g)
-      .map(v => v.replace(/^"|"$/g, ''));
-
+    const values = line.split(",");
     let obj = {};
-    headers.forEach((h, i) => obj[h] = values[i]);
+    headers.forEach((h, i) => {
+      obj[h.trim().replace(/\uFEFF/g, "")] = values[i];
+    });
     return obj;
   });
 }
 
+// 画面遷移
+function goHome() {
+  show("home");
+  updateRecord();
+}
+
+function goCategory() {
+  show("category");
+}
+
+function show(id) {
+  ["home","category","quiz","result"].forEach(v => {
+    document.getElementById(v).classList.add("hidden");
+  });
+  document.getElementById(id).classList.remove("hidden");
+}
+
+// クイズ開始
+function startQuiz(category) {
+  selectedCategory = category;
+  currentQuiz = quizData
+    .filter(q => q.category === category)
+    .sort(() => 0.5 - Math.random())
+    .slice(0, 5);
+
+  currentIndex = 0;
+  score = 0;
+
+  show("quiz");
+  showQuestion();
+}
+
 // 問題表示
-function nextQuestion() {
-  document.getElementById("result").textContent = "";
-  document.getElementById("explanation").textContent = "";
+function showQuestion() {
+  let q = currentQuiz[currentIndex];
 
-  if (quizData.length === 0) return;
+  document.getElementById("quiz-category").innerText = q.category;
+  document.getElementById("question").innerText = q.question;
+  document.getElementById("progress").innerText =
+    (currentIndex + 1) + " / 5";
 
-  currentQuiz = quizData[Math.floor(Math.random() * quizData.length)];
+  let choicesDiv = document.getElementById("choices");
+  choicesDiv.innerHTML = "";
 
-  document.getElementById("category").textContent = "【" + (currentQuiz.category || "") + "】";
-  document.getElementById("question").textContent = currentQuiz.question || "問題なし";
-
-  const choicesEl = document.getElementById("choices");
-  choicesEl.innerHTML = "";
-
-  let choices = [
-    currentQuiz.choice1,
-    currentQuiz.choice2,
-    currentQuiz.choice3,
-    currentQuiz.choice4
-  ].filter(c => c); // undefined対策
-
-  // ランダム並び替え
-  choices.sort(() => Math.random() - 0.5);
+  let choices = [q.choice1, q.choice2, q.choice3, q.choice4];
 
   choices.forEach(choice => {
-    const btn = document.createElement("button");
-    btn.textContent = choice;
-    btn.onclick = () => checkAnswer(choice);
-    choicesEl.appendChild(btn);
+    let btn = document.createElement("button");
+    btn.innerText = choice;
+    btn.onclick = () => answer(choice);
+    choicesDiv.appendChild(btn);
   });
 }
 
-// 判定
-function checkAnswer(choice) {
-  const resultEl = document.getElementById("result");
-  const explanationEl = document.getElementById("explanation");
+// 回答処理
+function answer(choice) {
+  let q = currentQuiz[currentIndex];
 
-  if (choice === currentQuiz.answer) {
-    resultEl.textContent = "正解！";
-  } else {
-    resultEl.textContent = "不正解…（正解：" + currentQuiz.answer + "）";
+  if (choice === q.answer) {
+    score++;
+    history.correct++;
   }
+  history.total++;
 
-  explanationEl.textContent = "解説：" + (currentQuiz.explanation || "");
+  currentIndex++;
+
+  if (currentIndex < 5) {
+    showQuestion();
+  } else {
+    showResult();
+  }
+}
+
+// 結果表示
+function showResult() {
+  show("result");
+
+  document.getElementById("score").innerText =
+    score + " / 5 正解";
+
+  let list = document.getElementById("result-list");
+  list.innerHTML = "";
+
+  currentQuiz.forEach(q => {
+    let p = document.createElement("p");
+    p.innerText =
+      "Q: " + q.question +
+      " / 正解: " + q.answer;
+    list.appendChild(p);
+  });
+
+  localStorage.setItem("history", JSON.stringify(history));
+}
+
+// 続ける
+function continueQuiz() {
+  startQuiz(selectedCategory);
+}
+
+// 学習記録
+function updateRecord() {
+  document.getElementById("record").innerText =
+    history.correct + " / " + history.total;
 }
 </script>
 
