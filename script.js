@@ -428,7 +428,7 @@
             <div class="lap-label">周回数 ${escapeHTML(String(Math.min(progress.rounds, LAP_DISPLAY_MAX)))} / 5</div>
             ${renderProgressBar(progress)}
             <div class="progress-meta">
-              <span>総${progress.total}問</span>
+              <span>全${progress.total}問</span>
               <span class="progress-meta__weak">苦手${progress.weak}問</span>
               <span>未挑戦${progress.unseen}問</span>
             </div>
