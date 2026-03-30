@@ -1,167 +1,27 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>たちばな ─ ぜんぶやる古典文法クイズ</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>たちばな ─ ぜんぶやる古典文法クイズ</title>
+  <meta name="theme-color" content="#F28500" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="app-shell">
+    <main id="app" class="app" aria-live="polite"></main>
+  </div>
 
-    <div id="app">
-        <section id="screen-loading" class="screen active">
-            <div class="loader-container">
-                <div class="spinner"></div>
-                <p>読み込み中…</p>
-            </div>
-        </section>
+  <template id="loading-template">
+    <section class="screen screen-center">
+      <div class="spinner" aria-hidden="true"></div>
+      <p class="loading-text">読み込み中…</p>
+    </section>
+  </template>
 
-        <section id="screen-home" class="screen">
-            <header class="home-header">
-                <div class="title-wrap">
-                    <img src="アイコンイラスト.png" alt="icon" class="title-icon" onerror="this.style.display='none'">
-                    <div>
-                        <h1>たちばな</h1>
-                        <p class="subtitle">ぜんぶやる古典文法</p>
-                    </div>
-                </div>
-            </header>
-
-            <div class="menu-buttons">
-                <button class="btn btn-main" onclick="app.navTo('category')">問題を解く</button>
-                <button class="btn btn-sub" onclick="app.startMode('random')">ランダム10問</button>
-                <button class="btn btn-weak" onclick="app.startMode('weak')">苦手問題</button>
-            </div>
-
-            <div class="progress-card card">
-                <h3>学習進捗</h3>
-                <div class="lap-indicators" id="lap-dots">
-                    </div>
-                <p class="lap-text">周回数 <span id="lap-count">0</span> / 5</p>
-                
-                <div class="gauge-container">
-                    <div class="gauge-bar">
-                        <div id="gauge-clear" class="gauge-fill bg-clear"></div>
-                        <div id="gauge-weak" class="gauge-fill bg-weak"></div>
-                    </div>
-                    <span class="gauge-percent" id="total-progress-percent">0%</span>
-                </div>
-                <div class="progress-stats">
-                    <span>全<span id="stat-total">0</span>問</span>
-                    <span class="text-bold text-weak">苦手<span id="stat-weak">0</span>問</span>
-                    <span>未挑戦<span id="stat-unseen">0</span>問</span>
-                </div>
-            </div>
-
-            <footer class="home-footer">
-                <a href="#" onclick="app.navTo('about')">このサイトについて</a>
-                <a href="#">問題報告</a>
-            </footer>
-        </section>
-
-        <section id="screen-about" class="screen">
-            <div class="header-ui">
-                <button class="back-btn" onclick="app.back()">
-                    <span class="back-arrow">く</span>
-                </button>
-            </div>
-            <div class="content">
-                <h2>このサイトについて</h2>
-                <p>ここにサイトの解説文が入ります。</p>
-            </div>
-        </section>
-
-        <section id="screen-category" class="screen">
-            <div class="header-ui">
-                <button class="back-btn" onclick="app.back()">
-                    <span class="back-arrow">く</span>
-                </button>
-                <h2>カテゴリ選択</h2>
-            </div>
-            <div id="category-list" class="list-container">
-                </div>
-        </section>
-
-        <section id="screen-section" class="screen">
-            <div class="header-ui">
-                <button class="back-btn" onclick="app.back()">
-                    <span class="back-arrow">く</span>
-                </button>
-                <h2 id="current-category-name">カテゴリ名</h2>
-            </div>
-            <div id="section-list" class="list-container">
-                </div>
-        </section>
-
-        <section id="screen-countdown" class="screen flex-center">
-            <div class="countdown-wrap">
-                <p id="countdown-mode-name" class="mode-label">モード名</p>
-                <div id="countdown-number" class="big-number">3</div>
-            </div>
-        </section>
-
-        <section id="screen-quiz" class="screen">
-            <header class="quiz-header">
-                <button class="back-btn" onclick="app.confirmExit()">
-                    <span class="back-arrow">く</span>
-                </button>
-                <div class="quiz-info">
-                    <span id="quiz-cat-label" class="cat-label">カテゴリ</span>
-                    <span id="quiz-progress-text" class="progress-counter">1/10</span>
-                </div>
-            </header>
-
-            <div class="quiz-body">
-                <div class="question-card card">
-                    <p id="question-text">問題文がここに入ります</p>
-                </div>
-
-                <div id="choices-area" class="choices-list">
-                    </div>
-
-                <div class="quiz-footer">
-                    <button id="btn-dont-know" class="link-btn" onclick="app.answer(null)">わからない</button>
-                    <button id="btn-remove-weak" class="btn btn-remove-weak hidden" onclick="app.removeFromWeak()">苦手からはずす</button>
-                </div>
-            </div>
-
-            <div id="feedback-overlay" class="feedback-overlay hidden">
-                <span id="feedback-mark"></span>
-            </div>
-        </section>
-
-        <section id="screen-result" class="screen">
-            <div class="result-header">
-                <h2>結果</h2>
-                <div class="score-display">
-                    <span id="result-score" class="text-main">8</span><span class="total-denom">/10</span>
-                </div>
-                <p id="result-msg" class="result-comment">お疲れさまでした</p>
-            </div>
-
-            <div id="wrong-list-area" class="wrong-questions">
-                <h3>間違えた問題</h3>
-                <div id="wrong-list"></div>
-            </div>
-
-            <div class="result-actions">
-                <button id="btn-retry" class="btn btn-main" onclick="app.retry()">もう一度</button>
-                <button id="btn-go-category" class="btn btn-sub" onclick="app.navTo('category')">カテゴリ選択へ</button>
-                <button class="btn btn-outline" onclick="app.navTo('home')">TOPへ</button>
-            </div>
-        </section>
-
-        <section id="screen-empty" class="screen flex-center">
-            <p id="empty-msg">問題がありません</p>
-            <button class="btn btn-outline" onclick="app.navTo('home')">TOPへ</button>
-        </section>
-
-    </div>
-
-    <audio id="snd-correct" src="クイズ正解2.mp3" preload="auto"></audio>
-    <script src="script.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>
