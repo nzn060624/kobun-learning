@@ -1,16 +1,15 @@
-const STORAGE_KEY = 'tachibana_quiz_state_v2';
-const CSV_PATH = 'questions.csv';
-const TITLE_ICON_PATH = 'アイコンイラスト.png';
+const STORAGE_KEY = 'tachibana-kobun-state-v1';
+const QUESTIONS_CSV_PATH = 'questions.csv';
+const ICON_PATH = 'アイコンイラスト.png';
+const TROPHY_PATH = '優勝カップ 9.png';
 const CORRECT_SOUND_PATH = 'クイズ正解2.mp3';
-const TROPHY_YELLOW_PATH = '優勝カップ_イエロー.png';
-const TROPHY_GRAY_PATH = '優勝カップ_グレー.png';
-const MAX_LAPS = 5;
-const QUIZ_COUNT = 10;
-const QUESTION_DELAY = 3000;
+const QUIZ_LENGTH = 10;
+const FEEDBACK_MS = 3000;
 
-const CATEGORY_SECTIONS = {
+const CATEGORY_ORDER = ['動詞', '形容詞/形容動詞', '助動詞', '助詞', '識別', '演習'];
+const SECTION_ORDER = {
   '動詞': ['動詞①', '動詞②'],
-  '形容詞 / 形容動詞': ['形容詞', '形容動詞'],
+  '形容詞/形容動詞': ['形容詞', '形容動詞'],
   '助動詞': ['助動詞①', '助動詞②'],
   '助詞': ['助詞①', '助詞②'],
   '識別': ['識別①', '識別②'],
@@ -22,96 +21,95 @@ const app = document.getElementById('app');
 const state = {
   loading: true,
   questions: [],
-  routeStack: [],
-  currentView: { name: 'loading' },
-  storage: loadStorage(),
-  session: null,
+  questionMap: new Map(),
+  storage: createDefaultStorage(),
+  history: [],
+  currentScreen: 'loading',
+  currentView: null,
   countdownTimer: null,
-  questionTimer: null,
-  audio: null,
+  autoNextTimer: null,
+  correctAudio: null,
 };
 
-init();
+window.addEventListener('DOMContentLoaded', init);
+window.addEventListener('beforeunload', clearTimers);
 
 async function init() {
-  try {
-    state.audio = new Audio(CORRECT_SOUND_PATH);
-  } catch (error) {
-    state.audio = null;
-  }
+  renderLoading();
+  loadStorage();
+  setupAudio();
 
-  render();
   try {
-    state.questions = await loadQuestions();
-    syncStorageWithQuestions();
+    const questions = await loadQuestions();
+    state.questions = questions;
+    state.questionMap = new Map(questions.map(q => [q.id, q]));
+    ensureQuestionStateKeys();
     state.loading = false;
-    navigate({ name: 'home' }, false);
+    navigate('home', { resetHistory: true });
   } catch (error) {
     console.error(error);
     state.loading = false;
-    navigate({ name: 'empty', message: '問題がありません' }, false);
+    renderEmpty('問題がありません');
   }
+
+  window.tachibanaDebug = {
+    getState: () => structuredClone(state.storage),
+    resetStorage: () => {
+      resetStorage();
+      navigate('home', { resetHistory: true });
+    },
+    getQuestions: () => state.questions,
+  };
 }
 
-function loadStorage() {
-  const fallback = { perQuestion: {}, laps: 0 };
+function setupAudio() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return {
-      perQuestion: parsed.perQuestion || {},
-      laps: Math.min(MAX_LAPS, Number(parsed.laps) || 0),
-    };
-  } catch {
-    return fallback;
+    state.correctAudio = new Audio(CORRECT_SOUND_PATH);
+    state.correctAudio.preload = 'auto';
+  } catch (error) {
+    state.correctAudio = null;
   }
-}
-
-function saveStorage() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.storage));
-}
-
-function syncStorageWithQuestions() {
-  const next = {};
-  for (const q of state.questions) {
-    const current = state.storage.perQuestion[q.id] || {};
-    next[q.id] = {
-      seen: Boolean(current.seen),
-      mastered: Boolean(current.mastered),
-      weak: Boolean(current.weak),
-    };
-  }
-  state.storage.perQuestion = next;
-  saveStorage();
 }
 
 async function loadQuestions() {
-  const response = await fetch(CSV_PATH, { cache: 'no-store' });
-  if (!response.ok) throw new Error('CSVの読み込みに失敗しました');
-  const text = await response.text();
-  return parseCsv(text).map((row) => ({
-    ...row,
-    question: normalizeMultiline(row.question || ''),
-    choices: shuffle([row.choice1, row.choice2, row.choice3, row.choice4].filter(Boolean)),
-  }));
+  const response = await fetch(QUESTIONS_CSV_PATH, { cache: 'no-store' });
+  if (!response.ok) throw new Error('Failed to load CSV');
+  const csvText = await response.text();
+  const rows = parseCSV(csvText);
+  const [header, ...dataRows] = rows;
+  if (!header || dataRows.length === 0) return [];
+
+  return dataRows
+    .filter(row => row.some(cell => String(cell).trim() !== ''))
+    .map(row => {
+      const item = Object.fromEntries(header.map((key, index) => [key, (row[index] || '').trim()]));
+      const category = normalizeCategory(item.category);
+      return {
+        id: item.id,
+        category,
+        section: item.section,
+        question: item.question,
+        choices: [item.choice1, item.choice2, item.choice3, item.choice4],
+        answer: item.answer,
+      };
+    });
 }
 
-function parseCsv(text) {
+function parseCSV(text) {
   const rows = [];
   let row = [];
   let cell = '';
   let inQuotes = false;
-  const input = text.replace(/^\uFEFF/, '');
+  const normalized = text.replace(/^\uFEFF/, '');
 
-  for (let i = 0; i < input.length; i += 1) {
-    const char = input[i];
-    const next = input[i + 1];
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized[i];
+    const next = normalized[i + 1];
 
     if (char === '"') {
       if (inQuotes && next === '"') {
         cell += '"';
-        i += 1;
+        i++;
       } else {
         inQuotes = !inQuotes;
       }
@@ -119,11 +117,11 @@ function parseCsv(text) {
       row.push(cell);
       cell = '';
     } else if ((char === '\n' || char === '\r') && !inQuotes) {
-      if (char === '\r' && next === '\n') i += 1;
+      if (char === '\r' && next === '\n') i++;
       row.push(cell);
-      cell = '';
-      if (row.some((item) => item !== '')) rows.push(row);
+      rows.push(row);
       row = [];
+      cell = '';
     } else {
       cell += char;
     }
@@ -133,611 +131,646 @@ function parseCsv(text) {
     row.push(cell);
     rows.push(row);
   }
-
-  const [header, ...body] = rows;
-  return body.map((r) => Object.fromEntries(header.map((key, index) => [key, r[index] || ''])));
+  return rows;
 }
 
-function normalizeMultiline(value) {
-  return value.replace(/\\n/g, '\n');
+function normalizeCategory(category) {
+  if (category === '形容詞 / 形容動詞') return '形容詞/形容動詞';
+  return category;
 }
 
-function navigate(view, push = true) {
-  clearTimers();
-  if (push && state.currentView) {
-    state.routeStack.push(state.currentView);
+function createDefaultStorage() {
+  return {
+    questionStates: {},
+    totalCorrectAnswers: 0,
+    playLogs: [],
+  };
+}
+
+function loadStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    state.storage = {
+      ...createDefaultStorage(),
+      ...parsed,
+      questionStates: parsed.questionStates || {},
+      playLogs: Array.isArray(parsed.playLogs) ? parsed.playLogs : [],
+    };
+  } catch (error) {
+    console.warn('storage load failed', error);
+    state.storage = createDefaultStorage();
   }
-  state.currentView = view;
-  render();
 }
 
-function goBack() {
-  clearTimers();
-  const prev = state.routeStack.pop();
-  if (prev) {
-    state.currentView = prev;
-    render();
-  } else {
-    navigate({ name: 'home' }, false);
+function saveStorage() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.storage));
+}
+
+function resetStorage() {
+  state.storage = createDefaultStorage();
+  ensureQuestionStateKeys();
+  saveStorage();
+}
+
+function ensureQuestionStateKeys() {
+  for (const q of state.questions) {
+    if (!state.storage.questionStates[q.id]) {
+      state.storage.questionStates[q.id] = {
+        seen: false,
+        everCorrect: false,
+        weak: false,
+      };
+    }
   }
-}
-
-function clearTimers() {
-  window.clearInterval(state.countdownTimer);
-  window.clearTimeout(state.questionTimer);
-  state.countdownTimer = null;
-  state.questionTimer = null;
+  saveStorage();
 }
 
 function getQuestionState(id) {
-  return state.storage.perQuestion[id] || { seen: false, mastered: false, weak: false };
+  return state.storage.questionStates[id] || { seen: false, everCorrect: false, weak: false };
 }
 
-function setQuestionState(id, patch) {
-  const current = getQuestionState(id);
-  state.storage.perQuestion[id] = { ...current, ...patch };
-  saveStorage();
+function getScopeQuestions({ mode, category, section }) {
+  if (mode === 'random') return [...state.questions];
+  if (mode === 'weak') return state.questions.filter(q => getQuestionState(q.id).weak);
+  return state.questions.filter(q => q.category === category && q.section === section);
 }
 
-function maybeAdvanceLap() {
-  const allMastered = state.questions.length > 0 && state.questions.every((q) => getQuestionState(q.id).mastered);
-  if (!allMastered) return;
-
-  state.storage.laps = Math.min(MAX_LAPS, state.storage.laps + 1);
-  const next = {};
-  for (const q of state.questions) {
-    next[q.id] = { seen: false, mastered: false, weak: false };
-  }
-  state.storage.perQuestion = next;
-  saveStorage();
+function buildQuizQuestions(scope, length = QUIZ_LENGTH) {
+  const unseen = scope.filter(q => !getQuestionState(q.id).seen);
+  const seen = scope.filter(q => getQuestionState(q.id).seen);
+  const first = shuffle(unseen).slice(0, length);
+  const remain = Math.max(0, length - first.length);
+  const second = shuffle(seen).slice(0, remain);
+  return shuffle([...first, ...second]);
 }
 
-function getGlobalStats() {
-  const total = state.questions.length;
+function getSummaryForQuestions(questions) {
+  const total = questions.length;
   let clear = 0;
   let weak = 0;
-  let unseen = 0;
+  let untried = 0;
 
-  for (const q of state.questions) {
-    const s = getQuestionState(q.id);
-    if (s.mastered) clear += 1;
-    if (s.weak) weak += 1;
-    if (!s.seen) unseen += 1;
+  for (const q of questions) {
+    const qs = getQuestionState(q.id);
+    if (!qs.seen) {
+      untried += 1;
+    } else if (qs.weak) {
+      weak += 1;
+    } else if (qs.everCorrect) {
+      clear += 1;
+    }
   }
 
   return {
     total,
     clear,
     weak,
-    unseen,
-    rate: total ? Math.round((clear / total) * 100) : 0,
-    laps: state.storage.laps,
+    untried,
+    rate: total ? Math.round((countEverCorrect(questions) / total) * 100) : 0,
   };
 }
 
-function getSectionStats(sectionName) {
-  const pool = state.questions.filter((q) => q.section === sectionName);
-  const total = pool.length;
-  let clear = 0;
-  let weak = 0;
-  let unseen = 0;
-  for (const q of pool) {
-    const s = getQuestionState(q.id);
-    if (s.mastered) clear += 1;
-    if (s.weak) weak += 1;
-    if (!s.seen) unseen += 1;
+function countEverCorrect(questions) {
+  return questions.filter(q => getQuestionState(q.id).everCorrect).length;
+}
+
+function getOverallSummary() {
+  return getSummaryForQuestions(state.questions);
+}
+
+function getRounds() {
+  const total = state.questions.length || 1;
+  return Math.min(5, Math.floor((state.storage.totalCorrectAnswers || 0) / total));
+}
+
+function navigate(screen, params = {}) {
+  clearTimers();
+  const { resetHistory = false, replace = false, ...view } = params;
+
+  if (resetHistory) {
+    state.history = [];
+  } else if (!replace && state.currentScreen) {
+    state.history.push({ screen: state.currentScreen, view: state.currentView });
   }
-  return { total, clear, weak, unseen, complete: total > 0 && weak === 0 && unseen === 0 };
-}
 
-function buildQuizPool(mode, category = '', section = '') {
-  if (mode === 'normal') {
-    return state.questions.filter((q) => toDisplayCategory(q.category) === category && q.section === section);
+  state.currentScreen = screen;
+  state.currentView = view;
+
+  switch (screen) {
+    case 'home':
+      renderHome();
+      break;
+    case 'about':
+      renderAbout();
+      break;
+    case 'category':
+      renderCategorySelect();
+      break;
+    case 'section':
+      renderSectionSelect(view.category);
+      break;
+    case 'countdown':
+      renderCountdown(view);
+      break;
+    case 'quiz':
+      renderQuiz(view);
+      break;
+    case 'result':
+      renderResult(view);
+      break;
+    case 'empty':
+      renderEmpty(view.message || '問題がありません', view.backTo || 'home');
+      break;
+    default:
+      renderHome();
   }
-  if (mode === 'random') return [...state.questions];
-  if (mode === 'weak') return state.questions.filter((q) => getQuestionState(q.id).weak);
-  return [];
 }
 
-function selectQuestions(mode, category = '', section = '') {
-  const pool = buildQuizPool(mode, category, section);
-  if (mode === 'weak' && pool.length === 0) return [];
-
-  const unseen = pool.filter((q) => !getQuestionState(q.id).seen);
-  const seen = pool.filter((q) => getQuestionState(q.id).seen);
-  const first = shuffle(unseen).slice(0, QUIZ_COUNT);
-  const need = QUIZ_COUNT - first.length;
-  const second = need > 0 ? shuffle(seen).slice(0, need) : [];
-  return [...first, ...second].map((q) => ({
-    ...q,
-    choices: shuffle([q.choice1, q.choice2, q.choice3, q.choice4].filter(Boolean)),
-  }));
-}
-
-function startQuiz(mode, category = '', section = '') {
-  const items = selectQuestions(mode, category, section);
-  if (items.length === 0) {
-    navigate({ name: 'empty', message: mode === 'weak' ? '苦手問題はありません' : '問題がありません' });
+function goBack() {
+  clearTimers();
+  const prev = state.history.pop();
+  if (!prev) {
+    navigate('home', { resetHistory: true });
     return;
   }
+  state.currentScreen = prev.screen;
+  state.currentView = prev.view;
 
-  state.session = {
-    mode,
+  switch (prev.screen) {
+    case 'home': renderHome(); break;
+    case 'about': renderAbout(); break;
+    case 'category': renderCategorySelect(); break;
+    case 'section': renderSectionSelect(prev.view.category); break;
+    case 'countdown': renderCountdown(prev.view); break;
+    case 'quiz': renderQuiz(prev.view); break;
+    case 'result': renderResult(prev.view); break;
+    case 'empty': renderEmpty(prev.view.message, prev.view.backTo); break;
+    default: renderHome();
+  }
+}
+
+function clearTimers() {
+  if (state.countdownTimer) {
+    clearInterval(state.countdownTimer);
+    state.countdownTimer = null;
+  }
+  if (state.autoNextTimer) {
+    clearTimeout(state.autoNextTimer);
+    state.autoNextTimer = null;
+  }
+}
+
+function startNormalFlow(category, section) {
+  const scope = getScopeQuestions({ mode: 'normal', category, section });
+  if (!scope.length) {
+    navigate('empty', { message: '問題がありません', backTo: 'home' });
+    return;
+  }
+  const questions = buildQuizQuestions(scope);
+  navigate('countdown', {
+    mode: 'normal',
     category,
     section,
-    label: mode === 'normal' ? category : (mode === 'random' ? 'ランダム10問' : '苦手問題'),
-    questions: items,
-    currentIndex: 0,
-    answers: [],
-    phase: 'countdown',
-    countdown: 3,
-    selectedChoice: null,
-    currentResult: null,
-    weakRemoved: false,
-  };
-
-  navigate({ name: 'countdown' });
-  startCountdown();
-}
-
-function startCountdown() {
-  state.session.phase = 'countdown';
-  state.session.countdown = 3;
-  render();
-  state.countdownTimer = window.setInterval(() => {
-    state.session.countdown -= 1;
-    if (state.session.countdown <= 0) {
-      window.clearInterval(state.countdownTimer);
-      state.countdownTimer = null;
-      state.session.phase = 'question';
-      render();
-    } else {
-      render();
-    }
-  }, 1000);
-}
-
-function currentQuestion() {
-  return state.session.questions[state.session.currentIndex];
-}
-
-function answerQuestion(choiceText, isUnknown = false) {
-  if (!state.session || state.session.currentResult) return;
-
-  const question = currentQuestion();
-  const correct = !isUnknown && choiceText === question.answer;
-  const qState = getQuestionState(question.id);
-
-  setQuestionState(question.id, {
-    seen: true,
-    mastered: qState.mastered || correct,
-    weak: correct ? qState.weak : true,
+    label: `${category} / ${section}`,
+    questions,
   });
-
-  maybeAdvanceLap();
-
-  state.session.selectedChoice = choiceText;
-  state.session.currentResult = {
-    correct,
-    answer: question.answer,
-  };
-  state.session.answers.push({
-    id: question.id,
-    question: question.question,
-    correct,
-    answer: question.answer,
-    selectedChoice: choiceText,
-  });
-  state.session.weakRemoved = false;
-
-  if (correct && state.audio) {
-    state.audio.currentTime = 0;
-    state.audio.play().catch(() => {});
-  }
-
-  render();
-
-  state.questionTimer = window.setTimeout(() => {
-    state.session.currentIndex += 1;
-    state.session.selectedChoice = null;
-    state.session.currentResult = null;
-    state.session.weakRemoved = false;
-
-    if (state.session.currentIndex >= state.session.questions.length) {
-      navigate({ name: 'result' });
-    } else {
-      render();
-    }
-  }, QUESTION_DELAY);
 }
 
-function removeWeakCurrentQuestion() {
-  const question = currentQuestion();
-  if (!question || !state.session?.currentResult?.correct || state.session.mode !== 'weak' || state.session.weakRemoved) return;
-  setQuestionState(question.id, { weak: false });
-  state.session.weakRemoved = true;
-  render();
-}
-
-function restartCurrentMode() {
-  if (!state.session) return;
-  startQuiz(state.session.mode, state.session.category, state.session.section);
-}
-
-function toDisplayCategory(raw) {
-  if (raw === '形容詞/形容動詞') return '形容詞 / 形容動詞';
-  return raw;
-}
-
-function shuffle(array) {
-  const clone = [...array];
-  for (let i = clone.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [clone[i], clone[j]] = [clone[j], clone[i]];
-  }
-  return clone;
-}
-
-function progressSegments(stats) {
-  const total = stats.total || 1;
-  return `
-    <div class="progress-segment progress-clear" style="width:${(stats.clear / total) * 100}%"></div>
-    <div class="progress-segment progress-weak" style="width:${(stats.weak / total) * 100}%"></div>
-    <div class="progress-segment progress-unseen" style="width:${(stats.unseen / total) * 100}%"></div>
-  `;
-}
-
-function renderTrophies(laps) {
-  return Array.from({ length: 5 }, (_, index) => {
-    const src = index < laps ? TROPHY_YELLOW_PATH : TROPHY_GRAY_PATH;
-    return `<img class="trophy" src="${src}" alt="トロフィー${index + 1}" />`;
-  }).join('');
-}
-
-function render() {
-  if (state.loading || state.currentView.name === 'loading') {
-    app.innerHTML = `
-      <section class="loading-state">
-        <div class="spinner"></div>
-        <p>読み込み中…</p>
-      </section>
-    `;
+function startMode(mode) {
+  const scope = getScopeQuestions({ mode });
+  if (!scope.length) {
+    const message = mode === 'weak' ? '苦手問題はありません' : '問題がありません';
+    navigate('empty', { message, backTo: 'home' });
     return;
   }
+  const questions = buildQuizQuestions(scope);
+  navigate('countdown', {
+    mode,
+    label: mode === 'random' ? 'ランダム10問' : '苦手問題',
+    questions,
+  });
+}
 
-  const view = state.currentView.name;
-  if (view === 'home') return renderHome();
-  if (view === 'about') return renderAbout();
-  if (view === 'categories') return renderCategories();
-  if (view === 'sections') return renderSections(state.currentView.category);
-  if (view === 'countdown') return renderCountdown();
-  if (view === 'question') return renderQuestion();
-  if (view === 'result') return renderResult();
-  if (view === 'empty') return renderEmpty(state.currentView.message);
+function renderLoading() {
+  app.innerHTML = document.getElementById('loading-template').innerHTML;
 }
 
 function renderHome() {
-  const stats = getGlobalStats();
+  const overall = getOverallSummary();
+  const rounds = getRounds();
+
   app.innerHTML = `
-    <section class="screen">
-      <div class="hero">
-        <div class="title-row">
-          <img class="title-icon" src="${TITLE_ICON_PATH}" alt="たちばなのアイコン" />
-          <div class="title-copy">
-            <h1 class="site-title">たちばな</h1>
-            <p class="site-subtitle">ぜんぶやる古典文法</p>
-          </div>
+    <section class="screen hero">
+      <div class="hero-title-wrap">
+        <img class="hero-icon" src="${ICON_PATH}" alt="花橘のアイコン" />
+        <div class="hero-title-text">
+          <h1 class="hero-title">たちばな</h1>
+          <p class="hero-subtitle">ぜんぶやる古典文法</p>
         </div>
       </div>
 
       <div class="button-stack">
-        <button class="btn btn-primary" data-action="to-categories">問題を解く</button>
+        <button class="btn btn-primary" data-action="to-category">問題を解く</button>
         <button class="btn btn-secondary" data-action="random">ランダム10問</button>
-        <button class="btn btn-weak" data-action="weak">苦手問題</button>
+        <button class="btn btn-tertiary" data-action="weak">苦手問題</button>
       </div>
 
-      <section class="progress-card">
+      <section class="card progress-card">
         <div class="progress-header">
-          <h2 class="progress-title">学習進捗</h2>
+          <h2 class="section-title">学習進捗</h2>
+          <span class="progress-rate">${overall.rate}%</span>
         </div>
-        <div class="trophies">${renderTrophies(stats.laps)}</div>
-        <div class="progress-bar">${progressSegments(stats)}</div>
-        <div class="progress-rate">${stats.rate}%</div>
+        ${renderTrophies(rounds)}
+        ${renderProgressBar(overall)}
         <div class="progress-meta">
-          <span>全${stats.total}問</span>
-          <span class="weak">苦手${stats.weak}問</span>
-          <span>未挑戦${stats.unseen}問</span>
+          <span>総問題数 ${overall.total}問</span>
+          <span class="pink">苦手 ${overall.weak}問</span>
+          <span>未挑戦 ${overall.untried}問</span>
         </div>
       </section>
 
       <div class="footer-links">
-        <button data-action="about">このサイトについて</button>
-        <button type="button" aria-disabled="true">問題報告</button>
+        <button class="footer-link" data-action="about">このサイトについて</button>
+        <span class="footer-link" aria-disabled="true">問題報告</span>
       </div>
     </section>
   `;
 
-  bindActions([
-    ['[data-action="to-categories"]', () => navigate({ name: 'categories' })],
-    ['[data-action="random"]', () => startQuiz('random')],
-    ['[data-action="weak"]', () => startQuiz('weak')],
-    ['[data-action="about"]', () => navigate({ name: 'about' })],
-  ]);
+  app.querySelector('[data-action="to-category"]').addEventListener('click', () => navigate('category'));
+  app.querySelector('[data-action="random"]').addEventListener('click', () => startMode('random'));
+  app.querySelector('[data-action="weak"]').addEventListener('click', () => startMode('weak'));
+  app.querySelector('[data-action="about"]').addEventListener('click', () => navigate('about'));
 }
 
 function renderAbout() {
   app.innerHTML = `
     <section class="screen">
-      <div class="topbar">
-        <button class="back-button" aria-label="戻る" data-action="back"></button>
-        <div class="topbar-center"></div>
-        <div class="topbar-right"></div>
+      <div class="topbar topbar-center">
+        <button class="back-button topbar-left" aria-label="戻る"></button>
+        <h1 class="topbar-title">このサイトについて</h1>
       </div>
-      <h2 class="screen-title">このサイトについて</h2>
-      <section class="info-card">
-        <p>ここにサイトの解説文が入ります</p>
+      <section class="card">
+        <p class="about-body">ここにサイトの解説文が入ります</p>
       </section>
     </section>
   `;
   bindBack();
 }
 
-function renderCategories() {
+function renderCategorySelect() {
+  const items = CATEGORY_ORDER.map(category => `
+    <button class="card-button" data-category="${escapeAttr(category)}">
+      <div class="card-button-head">
+        <h2 class="card-button-title">${escapeHtml(category === '形容詞/形容動詞' ? '形容詞 / 形容動詞' : category)}</h2>
+        <span class="card-arrow" aria-hidden="true"></span>
+      </div>
+    </button>
+  `).join('');
+
   app.innerHTML = `
     <section class="screen">
-      <div class="topbar">
-        <button class="back-button" aria-label="戻る" data-action="back"></button>
-        <div class="topbar-center"></div>
-        <div class="topbar-right"></div>
+      <div class="topbar topbar-center">
+        <button class="back-button topbar-left" aria-label="戻る"></button>
+        <h1 class="topbar-title">カテゴリ選択</h1>
       </div>
-      <h2 class="screen-title">カテゴリ選択</h2>
-      <div class="cards-list">
-        ${Object.keys(CATEGORY_SECTIONS).map((category) => `
-          <button class="card select-card" data-category="${category}">
-            <div class="section-header">
-              <p class="select-card-title">${category}</p>
-              <span class="arrow-right">＞</span>
-            </div>
+      <div class="card-list">${items}</div>
+    </section>
+  `;
+
+  bindBack();
+  app.querySelectorAll('[data-category]').forEach(button => {
+    button.addEventListener('click', () => navigate('section', { category: button.dataset.category }));
+  });
+}
+
+function renderSectionSelect(category) {
+  const sections = SECTION_ORDER[category] || [];
+  const cards = sections.map(section => {
+    const questions = state.questions.filter(q => q.category === category && q.section === section);
+    const summary = getSummaryForQuestions(questions);
+    const showWeak = summary.weak > 0;
+    const complete = summary.weak === 0 && summary.untried === 0 && summary.total > 0;
+    return `
+      <button class="card-button section-card" data-section="${escapeAttr(section)}">
+        <div class="card-button-head">
+          <h2 class="card-button-title">${escapeHtml(section)}</h2>
+          <span class="card-arrow" aria-hidden="true"></span>
+        </div>
+        ${renderProgressBar(summary)}
+        <div class="section-meta">
+          <span>全${summary.total}問</span>
+          ${showWeak ? `<span class="pink">苦手${summary.weak}問</span>` : ''}
+          <span>未挑戦${summary.untried}問</span>
+        </div>
+        ${complete ? '<span class="complete-badge">COMPLETE！</span>' : ''}
+      </button>
+    `;
+  }).join('');
+
+  app.innerHTML = `
+    <section class="screen">
+      <div class="topbar topbar-center">
+        <button class="back-button topbar-left" aria-label="戻る"></button>
+        <h1 class="topbar-title">セクション選択</h1>
+      </div>
+      <h2 class="list-screen-title">${escapeHtml(category === '形容詞/形容動詞' ? '形容詞 / 形容動詞' : category)}</h2>
+      <div class="card-list">${cards}</div>
+    </section>
+  `;
+
+  bindBack();
+  app.querySelectorAll('[data-section]').forEach(button => {
+    button.addEventListener('click', () => startNormalFlow(category, button.dataset.section));
+  });
+}
+
+function renderCountdown(view) {
+  let count = 3;
+  app.innerHTML = `
+    <section class="screen screen-center">
+      <p class="countdown-label">${escapeHtml(view.label || '')}</p>
+      <div class="countdown-number" id="countdown-number">${count}</div>
+    </section>
+  `;
+
+  state.countdownTimer = setInterval(() => {
+    count -= 1;
+    const target = document.getElementById('countdown-number');
+    if (target) target.textContent = count > 0 ? String(count) : '1';
+
+    if (count <= 0) {
+      clearInterval(state.countdownTimer);
+      state.countdownTimer = null;
+      const quizSession = {
+        ...view,
+        currentIndex: 0,
+        answers: [],
+        wrongItems: [],
+        questions: view.questions,
+      };
+      navigate('quiz', { ...quizSession, replace: true });
+    }
+  }, 1000);
+}
+
+function renderQuiz(view) {
+  const question = view.questions[view.currentIndex];
+  if (!question) {
+    finishQuiz(view);
+    return;
+  }
+
+  const shuffledChoices = question._shuffledChoices || shuffle([...question.choices]);
+  question._shuffledChoices = shuffledChoices;
+
+  app.innerHTML = `
+    <section class="screen">
+      <div class="quiz-top">
+        <button class="back-button" aria-label="戻る"></button>
+        <div class="quiz-category">${escapeHtml(getQuizHeaderLabel(view))}</div>
+        <div class="quiz-progress">${view.currentIndex + 1}/${view.questions.length}</div>
+      </div>
+
+      <section class="card question-card">
+        <p class="question-text">${escapeHtml(question.question)}</p>
+      </section>
+
+      <div class="choice-list">
+        ${shuffledChoices.map(choice => `
+          <button class="choice-button" data-choice="${escapeAttr(choice)}">
+            <span class="choice-label">${escapeHtml(choice)}</span>
+            <span class="choice-mark"></span>
           </button>
         `).join('')}
       </div>
+
+      <button class="text-link" data-unknown>わからない</button>
+      ${view.mode === 'weak' && getQuestionState(question.id).weak ? '<button class="remove-weak-button" data-remove-weak>苦手からはずす</button>' : ''}
     </section>
   `;
+
   bindBack();
-  document.querySelectorAll('[data-category]').forEach((btn) => {
-    btn.addEventListener('click', () => navigate({ name: 'sections', category: btn.dataset.category }));
+  const choiceButtons = [...app.querySelectorAll('[data-choice]')];
+  choiceButtons.forEach(button => {
+    button.addEventListener('click', () => handleAnswer(view, question, button.dataset.choice));
   });
-}
+  app.querySelector('[data-unknown]').addEventListener('click', () => handleAnswer(view, question, null));
 
-function renderSections(category) {
-  const sections = CATEGORY_SECTIONS[category] || [];
-  app.innerHTML = `
-    <section class="screen">
-      <div class="topbar">
-        <button class="back-button" aria-label="戻る" data-action="back"></button>
-        <div class="topbar-center"></div>
-        <div class="topbar-right"></div>
-      </div>
-      <h2 class="screen-title">セクション選択</h2>
-      <div class="cards-list">
-        ${sections.map((section) => {
-          const stats = getSectionStats(section);
-          return `
-            <button class="card select-card" data-section="${section}">
-              <div class="section-header">
-                <p class="select-card-title">${section}</p>
-                <span class="arrow-right">＞</span>
-              </div>
-              <div class="progress-bar">${progressSegments(stats)}</div>
-              <div class="select-card-sub">
-                全${stats.total}問
-                ${stats.weak > 0 ? `<span class="weak">　苦手${stats.weak}問</span>` : ''}
-                <span>　未挑戦${stats.unseen}問</span>
-              </div>
-              ${stats.complete ? '<div class="complete-badge">COMPLETE！</div>' : ''}
-            </button>
-          `;
-        }).join('')}
-      </div>
-    </section>
-  `;
-  bindBack();
-  document.querySelectorAll('[data-section]').forEach((btn) => {
-    btn.addEventListener('click', () => startQuiz('normal', category, btn.dataset.section));
-  });
-}
-
-function renderCountdown() {
-  if (!state.session) return;
-  app.innerHTML = `
-    <section class="countdown-screen">
-      <div class="countdown-label">${state.session.label}</div>
-      <div class="countdown-number">${state.session.countdown}</div>
-    </section>
-  `;
-}
-
-function renderQuestion() {
-  if (!state.session) return;
-  state.currentView = { name: 'question' };
-  const question = currentQuestion();
-  const result = state.session.currentResult;
-  const selected = state.session.selectedChoice;
-  const qState = getQuestionState(question.id);
-  const showWeakRemove = state.session.mode === 'weak' && result?.correct && qState.weak;
-
-  app.innerHTML = `
-    <section class="screen">
-      <div class="topbar">
-        <button class="back-button" aria-label="戻る" data-action="back-home"></button>
-        <div class="topbar-center">${state.session.mode === 'normal' ? state.session.category : state.session.label}</div>
-        <div class="topbar-right">${state.session.currentIndex + 1}/${state.session.questions.length}</div>
-      </div>
-
-      <div class="question-area">
-        <section class="question-card">
-          <p class="question-text">${escapeHtml(question.question)}</p>
-        </section>
-
-        <div class="choices">
-          ${question.choices.map((choice) => renderChoiceButton(choice, question.answer, selected, result)).join('')}
-        </div>
-
-        <button class="helper-link" data-action="unknown">わからない</button>
-
-        <div class="weak-remove-wrap">
-          ${showWeakRemove ? `
-            <button class="btn ${state.session.weakRemoved ? 'btn-success' : 'btn-neutral'} weak-remove-btn" data-action="remove-weak">
-              ${state.session.weakRemoved ? 'OK' : '苦手からはずす'}
-            </button>
-          ` : ''}
-        </div>
-
-        <div class="judge-overlay ${result ? 'visible' : ''}">${result ? (result.correct ? '○' : '×') : ''}</div>
-      </div>
-    </section>
-  `;
-
-  document.querySelector('[data-action="back-home"]').addEventListener('click', () => {
-    clearTimers();
-    state.session = null;
-    navigate({ name: 'home' }, false);
-  });
-
-  if (!result) {
-    document.querySelectorAll('[data-choice]').forEach((btn) => {
-      btn.addEventListener('click', () => answerQuestion(btn.dataset.choice));
-    });
-    document.querySelector('[data-action="unknown"]').addEventListener('click', () => answerQuestion('わからない', true));
-  }
-
-  const removeWeakBtn = document.querySelector('[data-action="remove-weak"]');
+  const removeWeakBtn = app.querySelector('[data-remove-weak]');
   if (removeWeakBtn) {
-    removeWeakBtn.addEventListener('click', removeWeakCurrentQuestion);
+    removeWeakBtn.addEventListener('click', () => {
+      const qs = getQuestionState(question.id);
+      qs.weak = false;
+      saveStorage();
+      renderQuiz({ ...view });
+    });
   }
 }
 
-function renderChoiceButton(choice, answer, selected, result) {
-  const classes = ['choice-btn'];
-  let mark = '';
+function handleAnswer(view, question, selectedChoice) {
+  const buttons = [...app.querySelectorAll('.choice-button')];
+  buttons.forEach(btn => btn.disabled = true);
+  const isCorrect = selectedChoice === question.answer;
+  const qs = getQuestionState(question.id);
+  qs.seen = true;
 
-  if (!result && selected === choice) classes.push('selected');
-  if (result) {
-    if (choice === answer) {
-      classes.push('correct');
-      mark = '<span class="choice-mark correct">✓</span>';
-    } else if (choice === selected && !result.correct) {
-      classes.push('incorrect');
-      mark = '<span class="choice-mark incorrect">×</span>';
+  if (isCorrect) {
+    if (!qs.everCorrect) qs.everCorrect = true;
+    state.storage.totalCorrectAnswers += 1;
+    playCorrectSound();
+  } else {
+    qs.weak = true;
+  }
+  saveStorage();
+
+  buttons.forEach(btn => {
+    const choice = btn.dataset.choice;
+    const mark = btn.querySelector('.choice-mark');
+    if (choice === question.answer) {
+      btn.classList.add('is-correct');
+      mark.textContent = '✓';
+      mark.classList.add('correct');
+    } else if (selectedChoice && choice === selectedChoice && !isCorrect) {
+      btn.classList.add('is-wrong');
+      mark.textContent = '×';
+      mark.classList.add('wrong');
     } else {
-      classes.push('dimmed');
+      btn.classList.add('is-dim');
     }
+  });
+
+  if (selectedChoice) {
+    const selectedButton = buttons.find(btn => btn.dataset.choice === selectedChoice);
+    if (selectedButton && isCorrect) selectedButton.classList.add('is-selected');
   }
 
-  return `
-    <button class="${classes.join(' ')}" ${result ? 'disabled' : ''} data-choice="${escapeAttr(choice)}">
-      <span>${escapeHtml(choice)}</span>
-      ${mark}
-    </button>
-  `;
+  view.answers.push({ questionId: question.id, selectedChoice, isCorrect });
+  if (!isCorrect) {
+    view.wrongItems.push({ question, answer: question.answer });
+  }
+
+  showAnswerOverlay(isCorrect);
+  state.autoNextTimer = setTimeout(() => {
+    view.currentIndex += 1;
+    if (view.currentIndex >= view.questions.length) {
+      finishQuiz(view);
+    } else {
+      renderQuiz({ ...view });
+    }
+  }, FEEDBACK_MS);
 }
 
-function renderResult() {
-  if (!state.session) return;
-  const total = state.session.questions.length;
-  const correctCount = state.session.answers.filter((a) => a.correct).length;
-  const wrongItems = state.session.answers.filter((a) => !a.correct);
-  const isNormal = state.session.mode === 'normal';
+function finishQuiz(view) {
+  const result = {
+    ...view,
+    score: view.answers.filter(item => item.isCorrect).length,
+  };
+  state.storage.playLogs.push({
+    mode: view.mode,
+    category: view.category || null,
+    section: view.section || null,
+    score: result.score,
+    total: view.questions.length,
+    playedAt: new Date().toISOString(),
+  });
+  saveStorage();
+  navigate('result', result);
+}
 
+function renderResult(view) {
+  const perfect = view.score === view.questions.length;
   app.innerHTML = `
     <section class="screen">
-      <div class="result-score-wrap">
-        <div class="result-score"><span class="main">${correctCount}</span><span class="sub">/${total}</span></div>
-        <div class="result-message">${correctCount === total ? 'すばらしい！' : 'お疲れさまでした'}</div>
+      <div class="topbar topbar-center">
+        <button class="back-button topbar-left" aria-label="戻る"></button>
+        <div class="topbar-spacer"></div>
       </div>
 
-      ${wrongItems.length ? `
-        <section>
-          <h2 class="screen-title">間違えた問題</h2>
-          <div class="result-list">
-            ${wrongItems.map((item) => `
-              <article class="result-card">
-                <p class="result-question">${escapeHtml(item.question)}</p>
-                <div><span class="result-answer-label">正解：</span><span class="result-answer">${escapeHtml(item.answer)}</span></div>
-              </article>
-            `).join('')}
-          </div>
+      <section class="score-wrap">
+        <div class="score-line">
+          <span class="score-main">${view.score}</span><span class="score-rest">/${view.questions.length}</span>
+        </div>
+        <p class="score-message">${perfect ? 'すばらしい！' : 'お疲れさまでした'}</p>
+      </section>
+
+      ${!perfect ? `
+        <section class="result-errors">
+          <h2 class="section-title">間違えた問題</h2>
+          ${view.wrongItems.map(item => `
+            <article class="error-card">
+              <p class="error-question">${escapeHtml(item.question.question)}</p>
+              <div class="error-answer-row">
+                <span class="error-label">正解：</span>
+                <span class="green">${escapeHtml(item.answer)}</span>
+              </div>
+            </article>
+          `).join('')}
         </section>
       ` : ''}
 
-      <div class="result-actions">
+      <div class="button-stack">
         <button class="btn btn-primary" data-action="retry">もう一度</button>
-        ${isNormal ? '<button class="btn btn-secondary" data-action="categories">カテゴリ選択へ</button>' : ''}
-        <button class="btn btn-ghost" data-action="top">TOPへ</button>
+        <button class="btn btn-secondary" data-action="category">カテゴリ選択へ</button>
+        <button class="btn btn-outline btn-compact" data-action="home">TOPへ</button>
       </div>
     </section>
   `;
 
-  bindActions([
-    ['[data-action="retry"]', restartCurrentMode],
-    ['[data-action="categories"]', () => {
-      state.session = null;
-      navigate({ name: 'categories' }, false);
-    }],
-    ['[data-action="top"]', () => {
-      state.session = null;
-      navigate({ name: 'home' }, false);
-    }],
-  ]);
+  bindBack();
+  app.querySelector('[data-action="retry"]').addEventListener('click', () => retryQuiz(view));
+  app.querySelector('[data-action="category"]').addEventListener('click', () => navigate('category', { resetHistory: true }));
+  app.querySelector('[data-action="home"]').addEventListener('click', () => navigate('home', { resetHistory: true }));
 }
 
-function renderEmpty(message) {
+function retryQuiz(view) {
+  if (view.mode === 'normal') {
+    startNormalFlow(view.category, view.section);
+    return;
+  }
+  startMode(view.mode);
+}
+
+function renderEmpty(message, backTo = 'home') {
   app.innerHTML = `
-    <section class="empty-state">
-      <p>${message}</p>
-      <button class="btn btn-primary" data-action="top">TOPへ</button>
+    <section class="screen screen-center">
+      <p class="empty-message">${escapeHtml(message)}</p>
+      <button class="btn btn-primary btn-compact" data-top>TOPへ</button>
     </section>
   `;
-  bindActions([[ '[data-action="top"]', () => navigate({ name: 'home' }, false) ]]);
+  app.querySelector('[data-top]').addEventListener('click', () => navigate(backTo, { resetHistory: true }));
+}
+
+function renderTrophies(rounds) {
+  const items = Array.from({ length: 5 }, (_, index) => `
+    <img class="trophy ${index < rounds ? 'is-on' : ''}" src="${TROPHY_PATH}" alt="トロフィー" />
+  `).join('');
+  return `<div class="trophy-row">${items}</div>`;
+}
+
+function renderProgressBar(summary) {
+  const total = summary.total || 1;
+  const clearWidth = (summary.clear / total) * 100;
+  const weakWidth = (summary.weak / total) * 100;
+  const untriedWidth = (summary.untried / total) * 100;
+
+  return `
+    <div class="progress-bar" aria-label="学習進捗">
+      <span class="progress-segment progress-clear" style="width:${clearWidth}%"></span>
+      <span class="progress-segment progress-weak" style="width:${weakWidth}%"></span>
+      <span class="progress-segment progress-untried" style="width:${untriedWidth}%"></span>
+    </div>
+  `;
 }
 
 function bindBack() {
-  const button = document.querySelector('[data-action="back"]');
-  if (button) button.addEventListener('click', goBack);
+  const backButton = app.querySelector('.back-button');
+  if (backButton) backButton.addEventListener('click', goBack);
 }
 
-function bindActions(pairs) {
-  pairs.forEach(([selector, handler]) => {
-    const node = document.querySelector(selector);
-    if (node) node.addEventListener('click', handler);
-  });
+function showAnswerOverlay(isCorrect) {
+  const overlay = document.createElement('div');
+  overlay.className = 'answer-overlay';
+  overlay.innerHTML = `<div class="answer-symbol ${isCorrect ? 'correct' : 'wrong'}">${isCorrect ? '○' : '×'}</div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => overlay.remove(), FEEDBACK_MS - 120);
+}
+
+function playCorrectSound() {
+  if (!state.correctAudio) return;
+  try {
+    state.correctAudio.currentTime = 0;
+    state.correctAudio.play().catch(() => {});
+  } catch (error) {
+    console.warn('audio play failed', error);
+  }
+}
+
+function getQuizHeaderLabel(view) {
+  if (view.mode === 'random') return 'ランダム10問';
+  if (view.mode === 'weak') return '苦手問題';
+  return view.category || '';
+}
+
+function shuffle(array) {
+  const cloned = [...array];
+  for (let i = cloned.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cloned[i], cloned[j]] = [cloned[j], cloned[i]];
+  }
+  return cloned;
 }
 
 function escapeHtml(value) {
   return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-    .replaceAll('\n', '<br>');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function escapeAttr(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+  return escapeHtml(value);
 }
-
-window.tachibanaDebug = {
-  getState: () => JSON.parse(JSON.stringify(state.storage)),
-  resetStorage: () => {
-    localStorage.removeItem(STORAGE_KEY);
-    state.storage = loadStorage();
-    syncStorageWithQuestions();
-    render();
-  },
-};
