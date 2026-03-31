@@ -6,12 +6,9 @@
 (() => {
   "use strict";
 
-  // ------------------------------
-  // 定数
-  // ------------------------------
   const STORAGE_KEY = "tachibana-kobun-quiz-state-v1";
   const QUESTIONS_CSV_PATH = "questions.csv";
-  const ICON_IMAGE_PATH = "アイコンイラスト.png";
+  const CORRECT_SOUND_PATH = "クイズ正解2.mp3";
   const QUIZ_LENGTH = 10;
 
   const CATEGORY_ORDER = [
@@ -33,7 +30,6 @@
   };
 
   const appState = {
-    isLoading: true,
     loadError: null,
     questions: [],
     history: [],
@@ -41,21 +37,20 @@
     session: null,
   };
 
-  // ------------------------------
-  // 初期化
-  // ------------------------------
+  let correctAudio = null;
+
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
     renderLoading("読み込み中…");
+
     try {
       const questions = await loadQuestionsFromCSV(QUESTIONS_CSV_PATH);
       appState.questions = questions;
-
       ensureStorageInitialized(questions);
+      prepareCorrectSound();
       exposeDebugHelpers();
-
-      goTo("home");
+      goTo("home", {}, false);
     } catch (error) {
       console.error(error);
       appState.loadError = error;
@@ -63,9 +58,6 @@
     }
   }
 
-  // ------------------------------
-  // データ読み込み
-  // ------------------------------
   async function loadQuestionsFromCSV(path) {
     const response = await fetch(path, { cache: "no-store" });
     if (!response.ok) {
@@ -75,8 +67,8 @@
     const csvText = await response.text();
     const rows = parseCSV(csvText);
 
-    const questions = rows.map((row, index) => {
-      const q = {
+    return rows.map((row, index) => {
+      const question = {
         id: row.id?.trim() || String(index + 1),
         category: row.category?.trim() || "",
         section: row.section?.trim() || "",
@@ -90,11 +82,9 @@
         answer: row.answer?.trim() || "",
       };
 
-      validateQuestion(q, index);
-      return q;
+      validateQuestion(question, index);
+      return question;
     });
-
-    return questions;
   }
 
   function parseCSV(text) {
@@ -103,14 +93,14 @@
     let row = [];
     let inQuotes = false;
 
-    for (let i = 0; i < text.length; i++) {
+    for (let i = 0; i < text.length; i += 1) {
       const char = text[i];
       const next = text[i + 1];
 
       if (char === '"') {
         if (inQuotes && next === '"') {
           current += '"';
-          i++;
+          i += 1;
         } else {
           inQuotes = !inQuotes;
         }
@@ -118,7 +108,7 @@
         row.push(current);
         current = "";
       } else if ((char === "\n" || char === "\r") && !inQuotes) {
-        if (char === "\r" && next === "\n") i++;
+        if (char === "\r" && next === "\n") i += 1;
         row.push(current);
         if (row.some(cell => cell.trim() !== "")) {
           lines.push(row);
@@ -139,13 +129,13 @@
 
     if (lines.length === 0) return [];
 
-    const headers = lines[0].map(h => h.trim());
+    const headers = lines[0].map(header => header.trim());
     return lines.slice(1).map(cells => {
-      const obj = {};
+      const result = {};
       headers.forEach((header, index) => {
-        obj[header] = cells[index] ?? "";
+        result[header] = cells[index] ?? "";
       });
-      return obj;
+      return result;
     });
   }
 
@@ -153,22 +143,21 @@
     if (!question.id || !question.category || !question.section || !question.question || !question.answer) {
       throw new Error(`CSV ${index + 2}行目の必須項目が不足しています。`);
     }
+
     if (question.choices.length !== 4) {
       throw new Error(`CSV ${index + 2}行目の選択肢数が4つではありません。`);
     }
+
     if (!question.choices.includes(question.answer)) {
       throw new Error(`CSV ${index + 2}行目の answer が choice1〜4 に含まれていません。`);
     }
   }
 
-  // ------------------------------
-  // localStorage
-  // ------------------------------
   function createDefaultStorageState(questions) {
     const questionStates = {};
 
-    questions.forEach(q => {
-      questionStates[q.id] = {
+    questions.forEach(question => {
+      questionStates[question.id] = {
         seen: false,
         weak: false,
         solvedCorrectOnce: false,
@@ -183,7 +172,6 @@
       questionStates,
       stats: {
         sessionsPlayed: 0,
-        laps: 0,
         totalAnswers: 0,
         totalCorrectAnswers: 0,
       },
@@ -192,6 +180,7 @@
 
   function ensureStorageInitialized(questions) {
     const saved = getStorageState();
+
     if (!saved) {
       resetProgress();
       return;
@@ -199,9 +188,9 @@
 
     let changed = false;
 
-    questions.forEach(q => {
-      if (!saved.questionStates[q.id]) {
-        saved.questionStates[q.id] = {
+    questions.forEach(question => {
+      if (!saved.questionStates[question.id]) {
+        saved.questionStates[question.id] = {
           seen: false,
           weak: false,
           solvedCorrectOnce: false,
@@ -214,7 +203,7 @@
     });
 
     Object.keys(saved.questionStates).forEach(id => {
-      if (!questions.some(q => q.id === id)) {
+      if (!questions.some(question => question.id === id)) {
         delete saved.questionStates[id];
         changed = true;
       }
@@ -223,7 +212,6 @@
     if (!saved.stats) {
       saved.stats = {
         sessionsPlayed: 0,
-        laps: 0,
         totalAnswers: 0,
         totalCorrectAnswers: 0,
       };
@@ -255,18 +243,8 @@
     return initial;
   }
 
-  function clearProgressStorage() {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (error) {
-      console.error("localStorage 削除失敗", error);
-    }
-    return resetProgress();
-  }
-
   function getQuestionState(questionId) {
-    const data = getStorageState();
-    return data?.questionStates?.[questionId] || null;
+    return getStorageState()?.questionStates?.[questionId] || null;
   }
 
   function updateQuestionState(questionId, updater) {
@@ -275,49 +253,34 @@
 
     updater(data.questionStates[questionId], data);
     data.questionStates[questionId].lastAnsweredAt = new Date().toISOString();
-
-    recalculateLaps(data);
     setStorageState(data);
-  }
-
-  function recalculateLaps(data) {
-    const total = appState.questions.length;
-    const solvedCount = appState.questions.filter(q => data.questionStates[q.id]?.solvedCorrectOnce).length;
-    data.stats.laps = total > 0 ? Math.floor(solvedCount / total) : 0;
   }
 
   function getProgressStats(questionsSubset = appState.questions) {
     const data = getStorageState();
-    const states = data.questionStates;
+    const states = data?.questionStates || {};
     const total = questionsSubset.length;
 
     let solved = 0;
     let weak = 0;
     let unseen = 0;
 
-    questionsSubset.forEach(q => {
-      const st = states[q.id];
-      if (!st.seen) unseen++;
-      if (st.weak) weak++;
-      if (st.solvedCorrectOnce) solved++;
+    questionsSubset.forEach(question => {
+      const state = states[question.id] || {};
+      if (!state.seen) unseen += 1;
+      if (state.weak) weak += 1;
+      if (state.solvedCorrectOnce) solved += 1;
     });
-
-    const progressRate = total > 0 ? Math.round((solved / total) * 100) : 0;
 
     return {
       total,
       solved,
       weak,
       unseen,
-      progressRate,
-      laps: Math.min(data.stats.laps, 5),
-      rawLaps: data.stats.laps,
+      progressRate: total > 0 ? Math.round((solved / total) * 100) : 0,
     };
   }
 
-  // ------------------------------
-  // デバッグ用
-  // ------------------------------
   function exposeDebugHelpers() {
     window.tachibanaDebug = {
       getState: () => getStorageState(),
@@ -327,47 +290,49 @@
         return result;
       },
       getQuestions: () => appState.questions,
-      getSectionStats: (category, section) => {
-        const list = filterQuestions({ category, section });
-        return getProgressStats(list);
-      },
+      getSectionStats: (category, section) => getProgressStats(filterQuestions({ category, section })),
     };
   }
 
-  // ------------------------------
-  // 画面遷移
-  // ------------------------------
+  function prepareCorrectSound() {
+    try {
+      correctAudio = new Audio(CORRECT_SOUND_PATH);
+      correctAudio.preload = "auto";
+    } catch (error) {
+      console.debug("効果音の事前読み込みをスキップしました", error);
+      correctAudio = null;
+    }
+  }
+
   function goTo(name, params = {}, pushHistory = true) {
     if (pushHistory && appState.currentView.name !== "loading") {
       appState.history.push(appState.currentView);
     }
+
     appState.currentView = { name, params };
     render();
   }
 
   function goBack(fallback = "home") {
-    const prev = appState.history.pop();
-    if (prev) {
-      appState.currentView = prev;
+    const previous = appState.history.pop();
+    if (previous) {
+      appState.currentView = previous;
       render();
-    } else {
-      goTo(fallback, {}, false);
+      return;
     }
+
+    goTo(fallback, {}, false);
   }
 
   function rerenderCurrentView() {
     render();
   }
 
-  // ------------------------------
-  // 出題ロジック
-  // ------------------------------
   function filterQuestions({ category = null, section = null, weakOnly = false } = {}) {
-    const all = appState.questions;
-    return all.filter(q => {
-      if (category && q.category !== category) return false;
-      if (section && q.section !== section) return false;
-      if (weakOnly && !getQuestionState(q.id)?.weak) return false;
+    return appState.questions.filter(question => {
+      if (category && question.category !== category) return false;
+      if (section && question.section !== section) return false;
+      if (weakOnly && !getQuestionState(question.id)?.weak) return false;
       return true;
     });
   }
@@ -377,10 +342,7 @@
     let pool = [];
 
     if (mode === "normal") {
-      pool = filterQuestions({
-        category: options.category,
-        section: options.section,
-      });
+      pool = filterQuestions({ category: options.category, section: options.section });
     } else if (mode === "random") {
       pool = [...appState.questions];
     } else if (mode === "weak") {
@@ -389,30 +351,20 @@
 
     if (pool.length === 0) return [];
 
-    const unseen = shuffle(pool.filter(q => !storage.questionStates[q.id].seen));
-    const seen = shuffle(pool.filter(q => storage.questionStates[q.id].seen));
-
-    const prioritized = [...unseen, ...seen];
-    return prioritized.slice(0, Math.min(QUIZ_LENGTH, prioritized.length));
+    const unseen = shuffle(pool.filter(question => !storage.questionStates[question.id]?.seen));
+    const seen = shuffle(pool.filter(question => storage.questionStates[question.id]?.seen));
+    return [...unseen, ...seen].slice(0, Math.min(QUIZ_LENGTH, pool.length));
   }
 
   function startQuiz(mode, options = {}) {
     const questions = buildQuizQuestions(mode, options);
 
     if (questions.length === 0) {
-      if (mode === "weak") {
-        goTo("empty", {
-          message: "苦手問題はありません",
-          buttonText: "TOPへ",
-          onClick: "home",
-        });
-      } else {
-        goTo("empty", {
-          message: "問題がありません",
-          buttonText: "TOPへ",
-          onClick: "home",
-        });
-      }
+      goTo("empty", {
+        message: mode === "weak" ? "苦手問題はありません" : "問題がありません",
+        buttonText: "TOPへ",
+        onClick: "home",
+      });
       return;
     }
 
@@ -420,9 +372,9 @@
       mode,
       options,
       title: getModeLabel(mode, options),
-      questions: questions.map(q => ({
-        ...q,
-        shuffledChoices: shuffle([...q.choices]),
+      questions: questions.map(question => ({
+        ...question,
+        shuffledChoices: shuffle([...question.choices]),
       })),
       currentIndex: 0,
       answers: [],
@@ -431,9 +383,7 @@
       timerId: null,
     };
 
-    goTo("countdown", {
-      label: getModeLabel(mode, options),
-    });
+    goTo("countdown", { label: getModeLabel(mode, options) });
   }
 
   function getModeLabel(mode, options) {
@@ -497,24 +447,45 @@
     const current = session?.questions?.[session.currentIndex];
     if (!current) return;
 
-    updateQuestionState(current.id, (state) => {
+    updateQuestionState(current.id, state => {
       state.weak = false;
     });
+
+    const button = document.getElementById("remove-weak-btn");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "苦手から外しました";
+      button.classList.add("is-done");
+    }
   }
 
   function finalizeSession() {
     const storage = getStorageState();
-    storage.stats.sessionsPlayed += 1;
-    recalculateLaps(storage);
-    setStorageState(storage);
-
+    if (storage?.stats) {
+      storage.stats.sessionsPlayed += 1;
+      setStorageState(storage);
+    }
     goTo("result");
   }
 
-  // ------------------------------
-  // 音
-  // ------------------------------
   function playCorrectSound() {
+    try {
+      const audio = correctAudio ? correctAudio.cloneNode() : new Audio(CORRECT_SOUND_PATH);
+      audio.currentTime = 0;
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch(() => fallbackCorrectBeep());
+      }
+    } catch (error) {
+      fallbackCorrectBeep(error);
+    }
+  }
+
+  function fallbackCorrectBeep(error) {
+    if (error) {
+      console.debug("音声ファイル再生に失敗したため簡易音に切り替えます", error);
+    }
+
     try {
       const context = new (window.AudioContext || window.webkitAudioContext)();
       const oscillator = context.createOscillator();
@@ -526,22 +497,17 @@
 
       gain.gain.setValueAtTime(0.0001, context.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.06, context.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.2);
 
       oscillator.connect(gain);
       gain.connect(context.destination);
-
       oscillator.start();
-      oscillator.stop(context.currentTime + 0.18);
-    } catch (error) {
-      // 音が鳴らせない環境でもエラーにしない
-      console.debug("効果音をスキップしました", error);
+      oscillator.stop(context.currentTime + 0.2);
+    } catch (beepError) {
+      console.debug("簡易音も再生できませんでした", beepError);
     }
   }
 
-  // ------------------------------
-  // レンダリング
-  // ------------------------------
   function render() {
     const screen = document.getElementById("screen");
     if (!screen) return;
@@ -596,14 +562,13 @@
       return;
     }
 
-    if (name === "loading") {
-      renderLoading(params.message || "読み込み中…");
-      return;
-    }
+    renderLoading(params.message || "読み込み中…");
   }
 
   function renderLoading(message = "読み込み中…") {
     const screen = document.getElementById("screen");
+    if (!screen) return;
+
     screen.innerHTML = `
       <section class="screen loading-wrap">
         <div class="center-box">
@@ -616,6 +581,8 @@
 
   function renderFatalError() {
     const screen = document.getElementById("screen");
+    if (!screen) return;
+
     screen.innerHTML = `
       <section class="screen empty-wrap">
         <div class="center-box card">
@@ -631,31 +598,21 @@
 
     return `
       <section class="screen home-screen">
-        <div class="title-block title-block-with-icon">
-          <div class="title-icon-wrap" aria-hidden="true">
-            <img
-              class="title-icon"
-              src="${escapeAttr(ICON_IMAGE_PATH)}"
-              alt=""
-              onerror="this.style.display='none'; this.parentElement.classList.add('is-empty');"
-            />
-          </div>
-          <div class="title-copy">
-            <h1 class="app-title">たちばな</h1>
-            <div class="app-subtitle">ぜんぶやる古典文法</div>
-          </div>
+        <div class="title-block is-centered">
+          <h1 class="app-title">たちばな</h1>
+          <div class="app-subtitle">ぜんぶやる古典文法</div>
         </div>
 
         <div class="button-row home-button-row">
           <button class="primary-btn large" id="start-normal">問題を解く</button>
-          <button class="secondary-btn" id="start-random">ランダム10問</button>
-          <button class="secondary-btn alt weak-mode-btn" id="start-weak">苦手問題</button>
+          <button class="secondary-btn random-mode-btn" id="start-random">ランダム10問</button>
+          <button class="secondary-btn weak-mode-btn" id="start-weak">苦手問題</button>
         </div>
 
         <section class="card progress-card">
           <div class="progress-card-header">
             <h2 class="progress-card-title">学習進捗</h2>
-            <button class="utility-btn" id="reset-progress-btn" type="button">リセット</button>
+            <button class="utility-btn" id="open-reset-dialog">リセット</button>
           </div>
 
           <div class="progress-meta-top">
@@ -665,7 +622,7 @@
 
           ${renderProgressBar(stats)}
 
-          <div class="progress-meta-bottom">
+          <div class="progress-meta-bottom progress-meta-home">
             <span>総問題数 ${stats.total}問</span>
             <span class="meta-danger">苦手 ${stats.weak}問</span>
             <span>未挑戦 ${stats.unseen}問</span>
@@ -673,16 +630,16 @@
         </section>
 
         <div class="footer-links">
-          <button class="footer-link" id="go-about" type="button">このサイトについて</button>
-          <button class="footer-link" id="dummy-report" type="button">問題報告</button>
+          <button class="footer-link" id="go-about">このサイトについて</button>
+          <button class="footer-link" id="dummy-report">問題報告</button>
         </div>
 
-        <div class="dialog-overlay" id="reset-dialog" hidden>
+        <div class="dialog-backdrop" id="reset-dialog" hidden>
           <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="reset-dialog-title">
             <div class="dialog-title" id="reset-dialog-title">学習記録を全てリセットしますか？</div>
-            <div class="dialog-actions">
-              <button class="dialog-btn dialog-btn-secondary" id="reset-cancel-btn" type="button">いいえ</button>
-              <button class="dialog-btn dialog-btn-primary" id="reset-confirm-btn" type="button">はい</button>
+            <div class="dialog-btn-row">
+              <button class="dialog-btn dialog-btn-cancel" id="reset-cancel-btn">いいえ</button>
+              <button class="dialog-btn dialog-btn-confirm" id="reset-confirm-btn">はい</button>
             </div>
           </div>
         </div>
@@ -694,7 +651,7 @@
     return `
       <section class="screen">
         <div class="topbar">
-          <button class="back-btn" data-back>＜</button>
+          <button class="back-btn" data-back aria-label="戻る">${renderChevronSVG("left", "back-chevron")}</button>
           <div class="topbar-center"></div>
           <div class="topbar-right"></div>
         </div>
@@ -711,18 +668,18 @@
     return `
       <section class="screen">
         <div class="topbar">
-          <button class="back-btn" data-back>＜</button>
+          <button class="back-btn" data-back aria-label="戻る">${renderChevronSVG("left", "back-chevron")}</button>
           <div class="topbar-center">カテゴリ選択</div>
           <div class="topbar-right"></div>
         </div>
 
-        <div class="stack categories-stack">
+        <div class="stack category-stack">
           ${CATEGORY_ORDER.map(category => `
-            <button class="list-card category-card" data-category="${escapeAttr(category)}" type="button">
+            <button class="list-card" data-category="${escapeAttr(category)}">
               <div class="list-card-main">
                 <div class="list-card-title">${escapeHTML(category)}</div>
               </div>
-              <span class="chevron chevron-right" aria-hidden="true"></span>
+              <span class="card-arrow" aria-hidden="true">${renderChevronSVG("right", "card-chevron")}</span>
             </button>
           `).join("")}
         </div>
@@ -736,7 +693,7 @@
     return `
       <section class="screen">
         <div class="topbar">
-          <button class="back-btn" data-back>＜</button>
+          <button class="back-btn" data-back aria-label="戻る">${renderChevronSVG("left", "back-chevron")}</button>
           <div class="topbar-center">${escapeHTML(category)}</div>
           <div class="topbar-right"></div>
         </div>
@@ -748,16 +705,18 @@
             const complete = stats.unseen === 0 && stats.weak === 0 && stats.total > 0;
 
             return `
-              <button class="section-card" data-section="${escapeAttr(section)}" data-category="${escapeAttr(category)}" type="button">
+              <button class="section-card" data-section="${escapeAttr(section)}" data-category="${escapeAttr(category)}">
                 <div class="section-card-main">
-                  <div class="section-card-header">
+                  <div class="section-card-head">
                     <div class="section-card-title-row">
                       <div class="section-card-title">${escapeHTML(section)}</div>
                       ${complete ? `<div class="complete-label complete-label-inline">COMPLETE！</div>` : ""}
                     </div>
-                    <span class="chevron chevron-right section-card-chevron" aria-hidden="true"></span>
+                    <span class="card-arrow section-card-arrow" aria-hidden="true">${renderChevronSVG("right", "card-chevron")}</span>
                   </div>
+
                   ${renderProgressBar(stats)}
+
                   <div class="progress-meta-bottom section-progress-meta">
                     <span>全${stats.total}問</span>
                     ${stats.weak > 0 ? `<span class="meta-danger">苦手${stats.weak}問</span>` : ""}
@@ -790,17 +749,18 @@
   function renderCountdown(label) {
     const screen = document.getElementById("screen");
     const session = appState.session;
-    if (!session) return;
+    if (!screen || !session) return;
 
     screen.innerHTML = `
-      <section class="screen countdown-wrap countdown-plain">
-        <div class="countdown-label">${escapeHTML(label)}</div>
-        <div class="countdown-number">${session.countdown}</div>
+      <section class="screen countdown-wrap">
+        <div class="countdown-plain">
+          <div class="countdown-label">${escapeHTML(label)}</div>
+          <div class="countdown-number">${session.countdown}</div>
+        </div>
       </section>
     `;
 
     clearTimeout(session.timerId);
-
     session.timerId = window.setTimeout(() => {
       session.countdown -= 1;
       if (session.countdown <= 0) {
@@ -814,42 +774,40 @@
   function renderQuizQuestion(revealState = null) {
     const screen = document.getElementById("screen");
     const session = appState.session;
-    if (!session) return;
+    if (!screen || !session) return;
 
     const current = session.questions[session.currentIndex];
     const displayIndex = session.currentIndex + 1;
     const isWeakMode = session.mode === "weak";
 
-    let overlayClass = "";
-    let overlayMarkup = "";
     let selectedChoice = null;
     let isCorrect = false;
+    let overlayMarkup = "";
 
     if (revealState) {
       selectedChoice = revealState.selectedChoice;
       isCorrect = revealState.isCorrect;
-      overlayClass = isCorrect ? "correct" : "incorrect";
       overlayMarkup = renderFeedbackIcon(isCorrect ? "correct" : "incorrect");
     }
 
     screen.innerHTML = `
       <section class="screen">
         <div class="topbar">
-          <button class="back-btn" id="quiz-back">＜</button>
+          <button class="back-btn" id="quiz-back" aria-label="戻る">${renderChevronSVG("left", "back-chevron")}</button>
           <div class="topbar-center">${escapeHTML(session.title)}</div>
           <div class="topbar-right">${displayIndex}/${session.questions.length}</div>
         </div>
 
         <section class="card question-card">
           <div class="question-text">${escapeHTML(current.question)}</div>
-          <div class="feedback-overlay ${overlayClass} ${revealState ? "show" : ""}">
+          <div class="feedback-overlay ${revealState ? `show ${isCorrect ? "correct" : "incorrect"}` : ""}">
             ${overlayMarkup}
           </div>
         </section>
 
         <div class="choice-list">
           ${current.shuffledChoices.map(choice => {
-            let classes = ["choice-btn"];
+            const classes = ["choice-btn"];
             let icon = "";
 
             if (revealState) {
@@ -865,12 +823,7 @@
             }
 
             return `
-              <button
-                class="${classes.join(" ")}"
-                data-choice="${escapeAttr(choice)}"
-                ${revealState ? "disabled" : ""}
-                type="button"
-              >
+              <button class="${classes.join(" ")}" data-choice="${escapeAttr(choice)}" ${revealState ? "disabled" : ""}>
                 ${escapeHTML(choice)}
                 ${icon ? `<span class="choice-icon">${icon}</span>` : ""}
               </button>
@@ -879,12 +832,12 @@
         </div>
 
         <div class="helper-link">
-          <button id="unknown-btn" ${revealState ? "disabled" : ""} type="button">わからない</button>
+          <button id="unknown-btn" ${revealState ? "disabled" : ""}>わからない</button>
         </div>
 
         ${isWeakMode && revealState && isCorrect && getQuestionState(current.id)?.weak ? `
-          <div class="weak-remove-wrap" style="text-align:center;">
-            <button class="inline-btn" id="remove-weak-btn" type="button">苦手からはずす</button>
+          <div class="weak-remove-wrap">
+            <button class="inline-btn" id="remove-weak-btn">苦手からはずす</button>
           </div>
         ` : ""}
       </section>
@@ -898,27 +851,26 @@
     if (!session) return "";
 
     const total = session.questions.length;
-    const correctCount = session.answers.filter(a => a.isCorrect).length;
-    const wrongAnswers = session.answers.filter(a => !a.isCorrect);
+    const correctCount = session.answers.filter(answer => answer.isCorrect).length;
+    const wrongAnswers = session.answers.filter(answer => !answer.isCorrect);
+    const showCategoryButton = session.mode === "normal";
 
     return `
-      <section class="screen">
+      <section class="screen result-screen">
         <div class="score-wrap">
           <div class="score-line">
             <span class="score-main">${correctCount}</span>
             <span class="score-total">/${total}</span>
           </div>
-          <div class="score-message">
-            ${correctCount === total ? "すばらしい！" : "お疲れさまでした"}
-          </div>
+          <div class="score-message">${correctCount === total ? "すばらしい！" : "お疲れさまでした"}</div>
         </div>
 
         ${wrongAnswers.length > 0 ? `
           <section class="stack result-stack">
             <h2 class="result-list-title">間違えた問題</h2>
-            <div class="result-list result-list-static">
+            <div class="result-list">
               ${wrongAnswers.map(item => `
-                <article class="card">
+                <article class="card result-item-card">
                   <div class="result-card-question">${escapeHTML(item.question)}</div>
                   <div class="result-card-answer">
                     <span class="result-answer-label">正解：</span>
@@ -931,9 +883,9 @@
         ` : ""}
 
         <div class="button-row result-button-row">
-          <button class="primary-btn" id="retry-btn" type="button">もう一度</button>
-          <button class="secondary-btn" id="back-category-btn" type="button">カテゴリ選択へ</button>
-          <button class="ghost-btn" id="to-home-btn" type="button">TOPへ</button>
+          <button class="primary-btn" id="retry-btn">もう一度</button>
+          ${showCategoryButton ? `<button class="secondary-btn" id="back-category-btn">カテゴリ選択へ</button>` : ""}
+          <button class="ghost-btn" id="to-home-btn">TOPへ</button>
         </div>
       </section>
     `;
@@ -944,7 +896,7 @@
       <section class="screen empty-wrap">
         <div class="center-box card">
           <h2 class="section-title">${escapeHTML(message)}</h2>
-          <div style="margin-top:18px;">
+          <div class="empty-btn-wrap">
             <button class="primary-btn" id="empty-btn">${escapeHTML(buttonText)}</button>
           </div>
         </div>
@@ -952,9 +904,6 @@
     `;
   }
 
-  // ------------------------------
-  // イベント紐付け
-  // ------------------------------
   function bindHomeEvents() {
     document.getElementById("start-normal")?.addEventListener("click", () => {
       goTo("categories");
@@ -977,40 +926,36 @@
     });
 
     const dialog = document.getElementById("reset-dialog");
-    const openBtn = document.getElementById("reset-progress-btn");
-    const cancelBtn = document.getElementById("reset-cancel-btn");
-    const confirmBtn = document.getElementById("reset-confirm-btn");
-
-    openBtn?.addEventListener("click", () => {
-      dialog?.removeAttribute("hidden");
+    document.getElementById("open-reset-dialog")?.addEventListener("click", () => {
+      if (dialog) dialog.hidden = false;
     });
 
-    cancelBtn?.addEventListener("click", () => {
-      dialog?.setAttribute("hidden", "");
+    document.getElementById("reset-cancel-btn")?.addEventListener("click", () => {
+      if (dialog) dialog.hidden = true;
     });
 
-    confirmBtn?.addEventListener("click", () => {
-      clearProgressStorage();
-      dialog?.setAttribute("hidden", "");
+    document.getElementById("reset-confirm-btn")?.addEventListener("click", () => {
+      resetProgress();
       rerenderCurrentView();
     });
 
-    dialog?.addEventListener("click", (event) => {
+    dialog?.addEventListener("click", event => {
       if (event.target === dialog) {
-        dialog.setAttribute("hidden", "");
+        dialog.hidden = true;
       }
     });
   }
 
   function bindCommonBack() {
-    document.querySelector("[data-back]")?.addEventListener("click", () => goBack());
+    document.querySelector("[data-back]")?.addEventListener("click", () => {
+      goBack();
+    });
   }
 
   function bindCategoryEvents() {
     document.querySelectorAll("[data-category]").forEach(button => {
       button.addEventListener("click", () => {
-        const category = button.dataset.category;
-        goTo("sections", { category });
+        goTo("sections", { category: button.dataset.category });
       });
     });
   }
@@ -1018,9 +963,10 @@
   function bindSectionEvents() {
     document.querySelectorAll("[data-section]").forEach(button => {
       button.addEventListener("click", () => {
-        const category = button.dataset.category;
-        const section = button.dataset.section;
-        startQuiz("normal", { category, section });
+        startQuiz("normal", {
+          category: button.dataset.category,
+          section: button.dataset.section,
+        });
       });
     });
   }
@@ -1034,9 +980,9 @@
     });
 
     if (!revealState) {
-      document.querySelectorAll("[data-choice]").forEach(btn => {
-        btn.addEventListener("click", () => {
-          answerCurrentQuestion(btn.dataset.choice, false);
+      document.querySelectorAll("[data-choice]").forEach(button => {
+        button.addEventListener("click", () => {
+          answerCurrentQuestion(button.dataset.choice, false);
         });
       });
 
@@ -1045,11 +991,8 @@
       });
     }
 
-    document.getElementById("remove-weak-btn")?.addEventListener("click", (event) => {
+    document.getElementById("remove-weak-btn")?.addEventListener("click", () => {
       removeWeakForCurrentQuestion();
-      const button = event.currentTarget;
-      button.disabled = true;
-      button.textContent = "解除しました";
     });
   }
 
@@ -1061,12 +1004,8 @@
     });
 
     document.getElementById("back-category-btn")?.addEventListener("click", () => {
-      const session = appState.session;
-      if (session?.mode === "normal" && session.options.category) {
-        goTo("sections", { category: session.options.category }, false);
-      } else {
-        goTo("categories", {}, false);
-      }
+      appState.session = null;
+      goTo("categories", {}, false);
     });
 
     document.getElementById("to-home-btn")?.addEventListener("click", () => {
@@ -1086,29 +1025,40 @@
     });
   }
 
-  // ------------------------------
-  // ユーティリティ
-  // ------------------------------
+  function renderChevronSVG(direction, className = "") {
+    const path = direction === "left"
+      ? "M16 4.5 L8 12 L16 19.5"
+      : "M8 4.5 L16 12 L8 19.5";
+
+    return `
+      <svg class="chevron-svg ${escapeAttr(className)}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="${path}" />
+      </svg>
+    `;
+  }
+
   function renderFeedbackIcon(type) {
     if (type === "correct") {
       return `
-        <svg class="feedback-icon" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-          <circle cx="60" cy="60" r="40" fill="none" stroke="currentColor" stroke-width="10"></circle>
+        <svg class="feedback-svg" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+          <circle cx="60" cy="60" r="42" />
+          <path d="M40 61 L54 74 L81 48" class="feedback-mark" />
         </svg>
       `;
     }
 
     return `
-      <svg class="feedback-icon" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-        <path d="M34 34 L86 86" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"></path>
-        <path d="M86 34 L34 86" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"></path>
+      <svg class="feedback-svg" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+        <circle cx="60" cy="60" r="42" />
+        <path d="M46 46 L74 74" class="feedback-mark" />
+        <path d="M74 46 L46 74" class="feedback-mark" />
       </svg>
     `;
   }
 
   function shuffle(array) {
     const copied = [...array];
-    for (let i = copied.length - 1; i > 0; i--) {
+    for (let i = copied.length - 1; i > 0; i -= 1) {
       const j = Math.floor(Math.random() * (i + 1));
       [copied[i], copied[j]] = [copied[j], copied[i]];
     }
