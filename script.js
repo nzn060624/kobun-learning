@@ -11,6 +11,7 @@
   // ------------------------------
   const STORAGE_KEY = "tachibana-kobun-quiz-state-v1";
   const QUESTIONS_CSV_PATH = "questions.csv";
+  const ICON_IMAGE_PATH = "アイコンイラスト.png";
   const QUIZ_LENGTH = 10;
 
   const CATEGORY_ORDER = [
@@ -254,6 +255,15 @@
     return initial;
   }
 
+  function clearProgressStorage() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (error) {
+      console.error("localStorage 削除失敗", error);
+    }
+    return resetProgress();
+  }
+
   function getQuestionState(questionId) {
     const data = getStorageState();
     return data?.questionStates?.[questionId] || null;
@@ -490,8 +500,6 @@
     updateQuestionState(current.id, (state) => {
       state.weak = false;
     });
-
-    rerenderCurrentView();
   }
 
   function finalizeSession() {
@@ -620,28 +628,34 @@
 
   function renderHome() {
     const stats = getProgressStats();
-    const trophyCount = Math.min(stats.rawLaps, 5);
 
     return `
-      <section class="screen">
-        <div class="title-block">
-          <h1 class="app-title">たちばな</h1>
-          <div class="app-subtitle">ぜんぶやる古典文法</div>
+      <section class="screen home-screen">
+        <div class="title-block title-block-with-icon">
+          <div class="title-icon-wrap" aria-hidden="true">
+            <img
+              class="title-icon"
+              src="${escapeAttr(ICON_IMAGE_PATH)}"
+              alt=""
+              onerror="this.style.display='none'; this.parentElement.classList.add('is-empty');"
+            />
+          </div>
+          <div class="title-copy">
+            <h1 class="app-title">たちばな</h1>
+            <div class="app-subtitle">ぜんぶやる古典文法</div>
+          </div>
         </div>
 
-        <div class="button-row">
+        <div class="button-row home-button-row">
           <button class="primary-btn large" id="start-normal">問題を解く</button>
           <button class="secondary-btn" id="start-random">ランダム10問</button>
-          <button class="secondary-btn alt" id="start-weak">苦手問題</button>
+          <button class="secondary-btn alt weak-mode-btn" id="start-weak">苦手問題</button>
         </div>
 
-        <section class="card">
-          <h2 class="progress-card-title">学習進捗</h2>
-
-          <div class="trophies" aria-label="周回トロフィー">
-            ${Array.from({ length: 5 }, (_, i) => `
-              <span class="trophy ${i < trophyCount ? "active" : ""}">🏆</span>
-            `).join("")}
+        <section class="card progress-card">
+          <div class="progress-card-header">
+            <h2 class="progress-card-title">学習進捗</h2>
+            <button class="utility-btn" id="reset-progress-btn" type="button">リセット</button>
           </div>
 
           <div class="progress-meta-top">
@@ -659,8 +673,18 @@
         </section>
 
         <div class="footer-links">
-          <button class="footer-link" id="go-about">このサイトについて</button>
-          <button class="footer-link" id="dummy-report">問題報告</button>
+          <button class="footer-link" id="go-about" type="button">このサイトについて</button>
+          <button class="footer-link" id="dummy-report" type="button">問題報告</button>
+        </div>
+
+        <div class="dialog-overlay" id="reset-dialog" hidden>
+          <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="reset-dialog-title">
+            <div class="dialog-title" id="reset-dialog-title">学習記録を全てリセットしますか？</div>
+            <div class="dialog-actions">
+              <button class="dialog-btn dialog-btn-secondary" id="reset-cancel-btn" type="button">いいえ</button>
+              <button class="dialog-btn dialog-btn-primary" id="reset-confirm-btn" type="button">はい</button>
+            </div>
+          </div>
         </div>
       </section>
     `;
@@ -692,13 +716,13 @@
           <div class="topbar-right"></div>
         </div>
 
-        <div class="stack">
+        <div class="stack categories-stack">
           ${CATEGORY_ORDER.map(category => `
-            <button class="list-card" data-category="${escapeAttr(category)}">
+            <button class="list-card category-card" data-category="${escapeAttr(category)}" type="button">
               <div class="list-card-main">
                 <div class="list-card-title">${escapeHTML(category)}</div>
               </div>
-              <div class="arrow">＞</div>
+              <span class="chevron chevron-right" aria-hidden="true"></span>
             </button>
           `).join("")}
         </div>
@@ -717,25 +741,29 @@
           <div class="topbar-right"></div>
         </div>
 
-        <div class="stack">
+        <div class="stack section-stack">
           ${sections.map(section => {
             const questions = filterQuestions({ category, section });
             const stats = getProgressStats(questions);
             const complete = stats.unseen === 0 && stats.weak === 0 && stats.total > 0;
 
             return `
-              <button class="section-card" data-section="${escapeAttr(section)}" data-category="${escapeAttr(category)}">
+              <button class="section-card" data-section="${escapeAttr(section)}" data-category="${escapeAttr(category)}" type="button">
                 <div class="section-card-main">
-                  <div class="section-card-title">${escapeHTML(section)}</div>
+                  <div class="section-card-header">
+                    <div class="section-card-title-row">
+                      <div class="section-card-title">${escapeHTML(section)}</div>
+                      ${complete ? `<div class="complete-label complete-label-inline">COMPLETE！</div>` : ""}
+                    </div>
+                    <span class="chevron chevron-right section-card-chevron" aria-hidden="true"></span>
+                  </div>
                   ${renderProgressBar(stats)}
-                  <div class="progress-meta-bottom">
+                  <div class="progress-meta-bottom section-progress-meta">
                     <span>全${stats.total}問</span>
                     ${stats.weak > 0 ? `<span class="meta-danger">苦手${stats.weak}問</span>` : ""}
                     <span>未挑戦${stats.unseen}問</span>
                   </div>
-                  ${complete ? `<div class="complete-label">COMPLETE！</div>` : ""}
                 </div>
-                <div class="arrow">＞</div>
               </button>
             `;
           }).join("")}
@@ -765,11 +793,9 @@
     if (!session) return;
 
     screen.innerHTML = `
-      <section class="screen countdown-wrap">
-        <div class="card countdown-card">
-          <div class="countdown-label">${escapeHTML(label)}</div>
-          <div class="countdown-number">${session.countdown}</div>
-        </div>
+      <section class="screen countdown-wrap countdown-plain">
+        <div class="countdown-label">${escapeHTML(label)}</div>
+        <div class="countdown-number">${session.countdown}</div>
       </section>
     `;
 
@@ -795,7 +821,7 @@
     const isWeakMode = session.mode === "weak";
 
     let overlayClass = "";
-    let overlaySymbol = "";
+    let overlayMarkup = "";
     let selectedChoice = null;
     let isCorrect = false;
 
@@ -803,7 +829,7 @@
       selectedChoice = revealState.selectedChoice;
       isCorrect = revealState.isCorrect;
       overlayClass = isCorrect ? "correct" : "incorrect";
-      overlaySymbol = isCorrect ? "○" : "×";
+      overlayMarkup = renderFeedbackIcon(isCorrect ? "correct" : "incorrect");
     }
 
     screen.innerHTML = `
@@ -817,7 +843,7 @@
         <section class="card question-card">
           <div class="question-text">${escapeHTML(current.question)}</div>
           <div class="feedback-overlay ${overlayClass} ${revealState ? "show" : ""}">
-            ${overlaySymbol}
+            ${overlayMarkup}
           </div>
         </section>
 
@@ -843,6 +869,7 @@
                 class="${classes.join(" ")}"
                 data-choice="${escapeAttr(choice)}"
                 ${revealState ? "disabled" : ""}
+                type="button"
               >
                 ${escapeHTML(choice)}
                 ${icon ? `<span class="choice-icon">${icon}</span>` : ""}
@@ -852,12 +879,12 @@
         </div>
 
         <div class="helper-link">
-          <button id="unknown-btn" ${revealState ? "disabled" : ""}>わからない</button>
+          <button id="unknown-btn" ${revealState ? "disabled" : ""} type="button">わからない</button>
         </div>
 
         ${isWeakMode && revealState && isCorrect && getQuestionState(current.id)?.weak ? `
-          <div style="text-align:center;">
-            <button class="inline-btn" id="remove-weak-btn">苦手からはずす</button>
+          <div class="weak-remove-wrap" style="text-align:center;">
+            <button class="inline-btn" id="remove-weak-btn" type="button">苦手からはずす</button>
           </div>
         ` : ""}
       </section>
@@ -887,9 +914,9 @@
         </div>
 
         ${wrongAnswers.length > 0 ? `
-          <section class="stack">
+          <section class="stack result-stack">
             <h2 class="result-list-title">間違えた問題</h2>
-            <div class="result-list">
+            <div class="result-list result-list-static">
               ${wrongAnswers.map(item => `
                 <article class="card">
                   <div class="result-card-question">${escapeHTML(item.question)}</div>
@@ -903,13 +930,11 @@
           </section>
         ` : ""}
 
-        <div class="button-row">
-          <button class="primary-btn" id="retry-btn">もう一度</button>
-          <button class="secondary-btn" id="back-category-btn">カテゴリ選択へ</button>
-          <button class="ghost-btn" id="to-home-btn">TOPへ</button>
+        <div class="button-row result-button-row">
+          <button class="primary-btn" id="retry-btn" type="button">もう一度</button>
+          <button class="secondary-btn" id="back-category-btn" type="button">カテゴリ選択へ</button>
+          <button class="ghost-btn" id="to-home-btn" type="button">TOPへ</button>
         </div>
-
-        <div class="debug-panel">debug: 正解 ${correctCount} / ${total}</div>
       </section>
     `;
   }
@@ -949,6 +974,31 @@
 
     document.getElementById("dummy-report")?.addEventListener("click", () => {
       alert("問題報告は現在準備中です。");
+    });
+
+    const dialog = document.getElementById("reset-dialog");
+    const openBtn = document.getElementById("reset-progress-btn");
+    const cancelBtn = document.getElementById("reset-cancel-btn");
+    const confirmBtn = document.getElementById("reset-confirm-btn");
+
+    openBtn?.addEventListener("click", () => {
+      dialog?.removeAttribute("hidden");
+    });
+
+    cancelBtn?.addEventListener("click", () => {
+      dialog?.setAttribute("hidden", "");
+    });
+
+    confirmBtn?.addEventListener("click", () => {
+      clearProgressStorage();
+      dialog?.setAttribute("hidden", "");
+      rerenderCurrentView();
+    });
+
+    dialog?.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        dialog.setAttribute("hidden", "");
+      }
     });
   }
 
@@ -995,8 +1045,11 @@
       });
     }
 
-    document.getElementById("remove-weak-btn")?.addEventListener("click", () => {
+    document.getElementById("remove-weak-btn")?.addEventListener("click", (event) => {
       removeWeakForCurrentQuestion();
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "解除しました";
     });
   }
 
@@ -1036,6 +1089,23 @@
   // ------------------------------
   // ユーティリティ
   // ------------------------------
+  function renderFeedbackIcon(type) {
+    if (type === "correct") {
+      return `
+        <svg class="feedback-icon" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+          <circle cx="60" cy="60" r="40" fill="none" stroke="currentColor" stroke-width="10"></circle>
+        </svg>
+      `;
+    }
+
+    return `
+      <svg class="feedback-icon" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+        <path d="M34 34 L86 86" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"></path>
+        <path d="M86 34 L34 86" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+
   function shuffle(array) {
     const copied = [...array];
     for (let i = copied.length - 1; i > 0; i--) {
