@@ -617,7 +617,7 @@
 
           <div class="progress-meta-top">
             <span>進捗率</span>
-            <strong>${stats.progressRate}%</strong>
+            <strong class="progress-rate-value">${stats.progressRate}%</strong>
           </div>
 
           ${renderProgressBar(stats)}
