@@ -799,7 +799,7 @@
         </div>
 
         <section class="card question-card">
-          <div class="question-text">${escapeHTML(current.question)}</div>
+          <div class="question-text">${renderQuestionText(current.question)}</div>
           <div class="feedback-overlay ${revealState ? `show ${isCorrect ? "correct" : "incorrect"}` : ""}">
             ${overlayMarkup}
           </div>
@@ -871,7 +871,7 @@
             <div class="result-list">
               ${wrongAnswers.map(item => `
                 <article class="card result-item-card">
-                  <div class="result-card-question">${escapeHTML(item.question)}</div>
+                  <div class="result-card-question">${renderQuestionText(item.question)}</div>
                   <div class="result-card-answer">
                     <span class="result-answer-label">正解：</span>
                     <span class="result-answer-text">${escapeHTML(item.answer)}</span>
@@ -1035,6 +1035,32 @@
         <path d="${path}" />
       </svg>
     `;
+  }
+
+  function renderQuestionText(value) {
+    const text = String(value);
+    let result = "";
+    let index = 0;
+
+    while (index < text.length) {
+      const start = text.indexOf("<", index);
+      if (start === -1) {
+        result += escapeHTML(text.slice(index));
+        break;
+      }
+
+      const end = text.indexOf(">", start + 1);
+      if (end === -1) {
+        result += escapeHTML(text.slice(index));
+        break;
+      }
+
+      result += escapeHTML(text.slice(index, start));
+      result += `<span class="question-underline">${escapeHTML(text.slice(start + 1, end))}</span>`;
+      index = end + 1;
+    }
+
+    return result;
   }
 
   function renderFeedbackIcon(type) {

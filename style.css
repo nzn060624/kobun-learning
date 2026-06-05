@@ -493,6 +493,11 @@ svg {
   white-space: pre-wrap;
 }
 
+.question-underline {
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
 .choice-list {
   display: flex;
   flex-direction: column;
@@ -833,8 +838,4 @@ svg {
   .screen-container {
     padding-top: 24px;
   }
-}
-
-question-underline {
-  text-decoration: underline;
 }
