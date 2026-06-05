@@ -834,3 +834,7 @@ svg {
     padding-top: 24px;
   }
 }
+
+question-underline {
+  text-decoration: underline;
+}
